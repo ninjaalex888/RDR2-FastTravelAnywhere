@@ -31,6 +31,7 @@ static void*        g_host;
 static void*        g_script;
 static ScriptMainFn g_main;
 static int          g_fail = 0, g_pass = 0;
+static int          g_textPulls = 0;   // times a test unloads the CAMP text from under a showing prompt
 
 // Same values as in fake_scripthook.cpp
 enum SetWhat
@@ -39,7 +40,12 @@ enum SetWhat
     S_SU_RUNNING, S_SU_IGNORE, S_DESTINATIONS, S_REFUSE, S_SIMFADEIN, S_PLAYERDEAD, S_PRESS, S_MENU,
     S_PLAYERPOS_X, S_PLAYERPOS_Y, S_DEST_X, S_DEST_Y, S_RESET_COUNTERS, S_INVEHICLE, S_ITEMINTERACTION,
     S_MENU_SHOWS, S_MOVE, S_NO_SCENARIO_TASK, S_STUCK_TRAVEL,
+    S_DOWN_FRAMES, S_CAMP_LOADED, S_CAMP_LOAD_FRAMES, S_CAMP_NEVER, S_CAMP_SCRIPT, S_FRENCH, S_CRAFTING,
+    S_SET_CAMP, S_CAMPFIRE_HUD, S_HUD_BROKEN, S_NOT_ACTIVE, S_LABEL_UNREADABLE,
 };
+// The camp scripts the fake knows, in the bit order of S_CAMP_SCRIPT, and whether they unload the CAMP text when they end.
+static const char* const kCampScripts[] = { "player_camp", "interactive_campfire", "property_use_core", "campfire_always", "sleeping_scenario" };
+static const int kCampScriptUnloads[]   = { 1, 1, 1, 0, 0 };
 enum GetWhat
 {
     Q_LIVE_PROMPTS = 1, Q_PROMPTS_MADE, Q_PROMPTS_DELETED, Q_P_CONTROL, Q_P_PRIORITY, Q_P_TRANSPORT,
@@ -49,12 +55,13 @@ enum GetWhat
     Q_DISABLED_Y, Q_DISABLED_JUMP, Q_DISABLED_ALL, Q_HELP_COUNT, Q_UNKNOWN, Q_BAD_ARGS, Q_BAD_VARSTRING,
     Q_BAD_HELP, Q_PLAYER_X, Q_PLAYER_Y, Q_TIMESCALE_X10, Q_GAME_MS, Q_LAST_UNKNOWN_LO, Q_LAST_BADARG_LO,
     Q_DISABLED_OTHER, Q_CONTEXT_SETS, Q_PAUSE_ENABLED, Q_MOD_MUSIC_STOPS, Q_PCF_100, Q_PCF_101,
+    Q_GROUP_DRAWN, Q_CAMP_LOADED, Q_CAMP_REQUESTS, Q_CAMP_DELETES, Q_BLANK_FRAMES, Q_BLANK_TOTAL,
 };
 enum { K_OFF = 0, K_DOWN, K_KNEEL, K_EXIT };
 
 static const int GL_PLAYER = 35, GL_FT_FLAGS = 43907, GL_FT_STATE = 43908, GL_CAMP = 1392040,
                  GL_UIBUSY = 1898068, GL_LODGING = 4644, GL_UNLOCK_FLOW = 1351050, GL_FLOW_STATUS = 12106,
-                 GL_ACTIVE_HORSE = 1135;
+                 GL_ACTIVE_HORSE = 1135, GL_MENU_STOP_A = 1357517, GL_MENU_STOP_B = 1935690;
 static const int CAMP_BIT = 1 << 23;
 static const int kRestGroup = 342152817;
 
@@ -102,6 +109,20 @@ static void Section(const char* name) { printf("\n%s\n", name); }
 static int G(int idx) { return FakeGetGlobal(idx); }
 static bool CampBit() { return (G(GL_CAMP) & CAMP_BIT) != 0; }
 
+// The live prompt's text as set (a label, or "~LIT~" + plain text), and what it shows right now.
+static bool RawIs(const char* want)
+{
+    char t[300];
+    FakeText(1, t, sizeof t);
+    return strcmp(t, want) == 0;
+}
+static bool ShowsText(const char* want)
+{
+    char t[300];
+    FakeText(4, t, sizeof t);
+    return strcmp(t, want) == 0;
+}
+
 static void LastHelp(char* out, int n) { FakeText(2, out, n); }
 static bool HelpIs(const char* want)
 {
@@ -116,16 +137,20 @@ static bool HelpHas(const char* part)
     return strstr(h, part) != nullptr;
 }
 
-static bool LogHas(const char* part)
+static int LogCount(const char* part)
 {
     FILE* f = fopen("FastTravelAnywhere.log", "rb");
-    if (!f) return false;
-    static char buf[1 << 20];
+    if (!f) return 0;
+    static char buf[1 << 21];
     size_t n = fread(buf, 1, sizeof buf - 1, f);
     fclose(f);
     buf[n] = 0;
-    return strstr(buf, part) != nullptr;
+    int count = 0;
+    for (const char* p = strstr(buf, part); p; p = strstr(p + 1, part))
+        count++;
+    return count;
 }
+static bool LogHas(const char* part) { return LogCount(part) > 0; }
 
 static int g_iniBump = 0;
 static void WriteIni(const char* body)
@@ -169,6 +194,7 @@ static const uint32_t SPACE = 0x5181713D; // INPUT_CONTEXT_A
 static void ResetWorld()
 {
     FakeSet(S_RESET_COUNTERS, 0);
+    FakeSet(S_MENU, 0);              // no menu choice left over from a test whose menu never opened
     FakeSetGlobal(GL_FT_FLAGS, 0);
     FakeSetGlobal(GL_FT_STATE, 0);
     FakeSetGlobal(GL_CAMP, 0);
@@ -225,12 +251,44 @@ int main()
     {
         char t[4096];
         FakeText(3, t, sizeof t);
-        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.0.0 loaded") != nullptr);
+        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.0.1 loaded") != nullptr);
         FILE* f = fopen("FastTravelAnywhere.ini", "rb");
         char ini[4096] = { 0 };
         if (f) { fread(ini, 1, sizeof ini - 1, f); fclose(f); }
         Check("writes the default settings file", strstr(ini, "PromptControl=INPUT_CONTEXT_A") != nullptr &&
                                                    strstr(ini, "RequireHorseNearby=1") != nullptr);
+    }
+
+    // The first kneels, in a French game whose CAMP text loads slowly: the
+    // plugin hasn't read the game's words for "Fast Travel" yet.
+    Section("The game's language");
+    {
+        FakeSet(S_FRENCH, 1);
+        FakeSet(S_CAMP_LOAD_FRAMES, 20);
+        FakeSet(S_LABEL_UNREADABLE, 1);   // first, the label's words can't be read out
+        int made = FakeGet(Q_PROMPTS_MADE);
+        FakeSet(S_KNEEL, 1);
+        RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+        Check("the CAMP text is asked for as the kneel starts", FakeGet(Q_CAMP_REQUESTS) >= 1);
+        Check("kneel menu up before the text has loaded: \"Fast Travel\" as plain text",
+              FakeGet(Q_CAMP_LOADED) == 0 && RawIs("~LIT~Fast Travel") && ShowsText("Fast Travel"));
+        RunUntil([] { return FakeGet(Q_CAMP_LOADED) == 1; }, 60);
+        Check("once it has loaded: the game's label, in the game's language (even with its words unreadable)",
+              RawIs("CAMP_FT_PROMPT") && ShowsText("Voyage rapide") && FakeGet(Q_LIVE_PROMPTS) == 1);
+        Frames(30);
+        Check("...switched once, and never without text", FakeGet(Q_PROMPTS_MADE) == made + 2 && FakeGet(Q_BLANK_FRAMES) == 0);
+        StandUp();
+        Frames(120);                      // the CAMP text is let go
+        FakeSet(S_LABEL_UNREADABLE, 0);
+        FakeSet(S_KNEEL, 1);
+        RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+        Check("next kneel, text not loaded yet: English as plain text again", RawIs("~LIT~Fast Travel"));
+        RunUntil([] { return FakeGet(Q_CAMP_LOADED) == 1; }, 60);
+        Check("...then the label, its words read this time", RawIs("CAMP_FT_PROMPT") && ShowsText("Voyage rapide") &&
+                                                             LogHas("The game's text for Fast Travel: \"Voyage rapide\""));
+        StandUp();
+        FakeSet(S_FRENCH, 0);
+        FakeSet(S_CAMP_LOAD_FRAMES, 3);
     }
 
     Section("Game build check");
@@ -282,6 +340,134 @@ int main()
     StandUp();
     Check("standing up removes it", FakeGet(Q_LIVE_PROMPTS) == 0 && FakeGet(Q_PROMPTS_DELETED) >= 1);
 
+    Section("Along with the kneel menu's own buttons");
+    ResetWorld();
+    FakeSet(S_KNEEL, 1);
+    {
+        bool drawn = RunUntil([] { return FakeGet(Q_GROUP_DRAWN) == 1; }, 60);
+        Check("the kneel menu shows its buttons before Arthur is all the way down", drawn && FakeGet(Q_KNEEL) == K_DOWN);
+        Check("Fast Travel comes up with them, in the same frame, with its text",
+              FakeGet(Q_LIVE_PROMPTS) == 1 && ShowsText("Fast Travel") && FakeGet(Q_P_ENABLED) == 1);
+    }
+    Press(SPACE);
+    Check("pressed before he's all the way down: nothing yet (the game's menu would close at once)",
+          (G(GL_FT_FLAGS) & 4) == 0 && !CampBit() && FakeGet(Q_MENU_OPENS) == 0 && FakeGet(Q_KNEEL) == K_DOWN);
+    Check("...the log says it waits for him", LogHas("still getting down"));
+    {
+        bool opened = RunUntil([] { return FakeGet(Q_MENU_OPEN) == 1; }, 60);
+        Check("the menu opens as soon as he's down", opened && FakeGet(Q_KNEEL) == K_KNEEL);
+    }
+    Frames(15);
+    Check("...and stays open", FakeGet(Q_MENU_OPEN) == 1 && G(GL_FT_STATE) == 1 && FakeGet(Q_MENU_OPENS) == 1);
+    FakeSet(S_MENU, 1);
+    Frames(3);
+    StandUp();
+
+    ResetWorld();
+    FakeSet(S_KNEEL, 1);
+    RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+    Press(SPACE);
+    FakeSet(S_KNEEL, 0);   // he gets straight back up
+    Frames(40);
+    Check("pressed while getting down, then straight back up: no menu",
+          FakeGet(Q_MENU_OPENS) == 0 && G(GL_FT_FLAGS) == 0 && !CampBit());
+    Check("...the log says the press was dropped", LogHas("dropped the press"));
+    StandUp();
+
+    ResetWorld();
+    FakeSet(S_DOWN_FRAMES, 200);   // a kneel that takes ages to get down
+    FakeSet(S_KNEEL, 1);
+    RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+    Press(SPACE);
+    Frames(100);
+    Check("still not down 3 s after the press: the press is dropped", LogHas("3 s later") && FakeGet(Q_MENU_OPENS) == 0);
+    RunUntil([] { return FakeGet(Q_KNEEL) == K_KNEEL; }, 250);
+    Frames(5);
+    Check("...and nothing opens by itself once he's down", FakeGet(Q_MENU_OPENS) == 0 && G(GL_FT_FLAGS) == 0);
+    StandUp();
+    FakeSet(S_DOWN_FRAMES, 30);
+
+    ResetWorld();
+    Kneel();
+    FakeSet(S_SET_CAMP, 1);   // Set Up Camp (E): the kneel menu takes its buttons down, its group still up
+    Frames(2);
+    Check("Set Up Camp pressed: Fast Travel goes with the kneel menu's own buttons",
+          FakeGet(Q_LIVE_PROMPTS) == 0 && FakeGet(Q_GROUP_DRAWN) == 1);
+    Press(SPACE);
+    Frames(2);
+    Check("...and Space does nothing then", FakeGet(Q_MENU_OPENS) == 0 && G(GL_FT_FLAGS) == 0 && !CampBit());
+    StandUp();
+
+    ResetWorld();
+    {
+        int dropped = LogCount("dropped the press");
+        FakeSet(S_KNEEL, 1);
+        RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+        Press(SPACE);             // pressed while getting down...
+        FakeSet(S_SET_CAMP, 1);   // ...then Set Up Camp
+        Frames(40);
+        Check("a press held for him to get down, then Set Up Camp: dropped, no menu",
+              FakeGet(Q_MENU_OPENS) == 0 && G(GL_FT_FLAGS) == 0 && LogCount("dropped the press") == dropped + 1);
+        StandUp();
+    }
+
+    ResetWorld();
+    Kneel();
+    FakeSet(S_CAMPFIRE_HUD, 1);   // a campfire's own prompts come up (its bits 2 and 3)
+    Frames(2);
+    Check("a campfire's own prompts up: Fast Travel leaves them to it", FakeGet(Q_LIVE_PROMPTS) == 0);
+    FakeSet(S_CAMPFIRE_HUD, 0);
+    StandUp();
+
+    ResetWorld();
+    FakeSet(S_HUD_BROKEN, 1);     // a game build where the kneel's bit isn't where the plugin looks
+    FakeSet(S_KNEEL, 1);
+    {
+        bool early = RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 20);
+        Check("kneel menu bit never seen: no Fast Travel while he's getting down", !early && FakeGet(Q_KNEEL) == K_DOWN);
+    }
+    RunUntil([] { return FakeGet(Q_KNEEL) == K_KNEEL; }, 60);
+    Frames(1);
+    Check("...but once he's all the way down, as in 1.0.0", FakeGet(Q_LIVE_PROMPTS) == 1 && FakeGet(Q_P_ENABLED) == 1);
+    Press(SPACE);
+    Frames(3);
+    Check("...and it works", FakeGet(Q_MENU_OPEN) == 1);
+    FakeSet(S_MENU, 1);
+    Frames(3);
+    StandUp();
+    FakeSet(S_HUD_BROKEN, 0);
+
+    ResetWorld();
+    FakeSet(S_NOT_ACTIVE, 1);     // all the way down, in the scenario's base, but not "active" in it
+    Kneel();
+    Press(SPACE);
+    Frames(15);
+    Check("down in the scenario's base only: the menu opens and stays open (func_502 takes either)",
+          FakeGet(Q_MENU_OPEN) == 1 && G(GL_FT_STATE) == 1);
+    FakeSet(S_MENU, 1);
+    Frames(3);
+    StandUp();
+    FakeSet(S_NOT_ACTIVE, 0);
+
+    ResetWorld();
+    Kneel();
+    FakeSet(S_CAMP_LOADED, 0);        // the CAMP text gone just now...
+    g_textPulls++;
+    FakeSet(S_CAMP_LOAD_FRAMES, 10);  // ...and slow to come back
+    Frames(1);
+    Press(SPACE);
+    Check("pressed while the CAMP text is still coming in: the menu waits for it (its heading is in it)",
+          FakeGet(Q_MENU_OPENS) == 0 && (G(GL_FT_FLAGS) & 4) == 0 && LogHas("once the CAMP text is in") &&
+          FakeGet(Q_BLANK_FRAMES) <= 1);
+    {
+        bool opened = RunUntil([] { return FakeGet(Q_MENU_OPEN) == 1; }, 40);
+        Check("...and opens once it's in", opened && FakeGet(Q_CAMP_LOADED) == 1);
+    }
+    FakeSet(S_MENU, 1);
+    Frames(3);
+    StandUp();
+    FakeSet(S_CAMP_LOAD_FRAMES, 3);
+
     Section("Fast travel, all the way");
     ResetWorld();
     Kneel();
@@ -315,8 +501,10 @@ int main()
     bool faded = RunUntil([] { return FakeGet(Q_FADE) == 0; }, 200);
     Check("the plugin fades the screen back in", faded && FakeGet(Q_MOD_FADEINS) == 1);
     Check("game state back to idle", G(GL_FT_STATE) == 0 && G(GL_FT_FLAGS) == 0 && !CampBit());
+    Check("the CAMP text is gone after the trip (as players found in the game)", FakeGet(Q_CAMP_LOADED) == 0);
     Kneel();
     Check("kneeling again offers it again", FakeGet(Q_LIVE_PROMPTS) == 1 && FakeGet(Q_P_ENABLED) == 1);
+    Check("...with its text showing (1.0.0 showed none here)", ShowsText("Fast Travel") && FakeGet(Q_BLANK_FRAMES) == 0);
     StandUp();
 
     Section("When the game fades in by itself");
@@ -502,11 +690,44 @@ int main()
     FakeSetGlobal(GL_LODGING, 3);
 
     FakeSet(S_NO_SCENARIO_TASK, 1);
-    Kneel();
-    Check("kneel without a scenario task (the game would close its menu): greyed out", FakeGet(Q_P_ENABLED) == 0);
+    FakeSet(S_KNEEL, 1);
+    RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+    Check("kneel without a scenario task (the game would close its menu): greyed out from the start",
+          FakeGet(Q_P_ENABLED) == 0 && FakeGet(Q_KNEEL) == K_DOWN);
+    RunUntil([] { return FakeGet(Q_KNEEL) == K_KNEEL; }, 60);
+    Frames(2);
+    Check("...and once he's down", FakeGet(Q_P_ENABLED) == 0);
     Check("...and the log says so", LogHas("PED_HAS_USE_SCENARIO_TASK is false"));
     StandUp();
+    WriteIni("ShowWhenUnavailable=0\r\n");
+    FakeSet(S_KNEEL, 1);
+    {
+        bool shown = RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) != 0; }, 45);
+        Check("...with ShowWhenUnavailable=0, never shown at all", !shown);
+    }
+    StandUp();
+    WriteIni("");
     FakeSet(S_NO_SCENARIO_TASK, 0);
+
+    FakeSetGlobal(GL_MENU_STOP_A, 1);   // the journal is open
+    Kneel();
+    Check("journal open (the game would close its menu): greyed out", FakeGet(Q_P_ENABLED) == 0);
+    StandUp();
+    FakeSetGlobal(GL_MENU_STOP_A, 0);
+    FakeSetGlobal(GL_MENU_STOP_B, 1);   // the satchel is open
+    Kneel();
+    Check("satchel open (likewise): greyed out", FakeGet(Q_P_ENABLED) == 0);
+    StandUp();
+    FakeSetGlobal(GL_MENU_STOP_B, 0);
+    Kneel();
+    Press(SPACE);
+    Frames(3);
+    FakeSetGlobal(GL_MENU_STOP_A, 1);   // the journal opened over the fast travel menu
+    Frames(2);
+    Check("...and with the menu open: the game closes it, the plugin goes back to idle, camp bit restored",
+          FakeGet(Q_MENU_OPEN) == 0 && G(GL_FT_STATE) == 0 && !CampBit() && LogHas("1357517=1"));
+    FakeSetGlobal(GL_MENU_STOP_A, 0);
+    StandUp();
 
     FakeSet(S_PLAYERMENU, 1);
     Kneel();
@@ -538,6 +759,150 @@ int main()
     Check("...and shown when it can", FakeGet(Q_LIVE_PROMPTS) == 1);
     StandUp();
     WriteIni("");
+
+    Section("The Fast Travel text (the game's CAMP text)");
+    ResetWorld();
+    {
+        int dels = FakeGet(Q_CAMP_DELETES);
+        Kneel();
+        Check("loaded while kneeling", FakeGet(Q_CAMP_LOADED) == 1);
+        StandUp();
+        Frames(60);
+        Check("...kept for a moment after the kneel", FakeGet(Q_CAMP_LOADED) == 1);
+        Frames(90);
+        Check("...then let go of, as the Craft menu does", FakeGet(Q_CAMP_LOADED) == 0 && FakeGet(Q_CAMP_DELETES) == dels + 1);
+    }
+
+    ResetWorld();
+    FakeSet(S_CAMP_LOAD_FRAMES, 20);   // slower to load than the kneel menu is to come up
+    {
+        int made = FakeGet(Q_PROMPTS_MADE);
+        FakeSet(S_KNEEL, 1);
+        RunUntil([] { return FakeGet(Q_LIVE_PROMPTS) == 1; }, 60);
+        Check("not loaded yet when the kneel menu comes up: the game's words as plain text",
+              FakeGet(Q_CAMP_LOADED) == 0 && RawIs("~LIT~Fast Travel") && ShowsText("Fast Travel"));
+        RunUntil([] { return FakeGet(Q_CAMP_LOADED) == 1; }, 60);
+        Frames(5);
+        Check("...and left as it is once the text has loaded", FakeGet(Q_PROMPTS_MADE) == made + 1 && FakeGet(Q_LIVE_PROMPTS) == 1);
+        StandUp();
+    }
+    FakeSet(S_CAMP_LOAD_FRAMES, 3);
+
+    ResetWorld();
+    Kneel();
+    FakeSet(S_CRAFTING, 1);   // Craft (R): the crafting menu opens
+    Frames(5);
+    Check("Craft menu open: Fast Travel out of its way", FakeGet(Q_LIVE_PROMPTS) == 0);
+    FakeSet(S_CRAFTING, 0);   // ...and closes, unloading the CAMP text as it does
+    Frames(2);
+    Check("back from the Craft menu, which unloaded the CAMP text: Fast Travel back, with its text",
+          FakeGet(Q_LIVE_PROMPTS) == 1 && FakeGet(Q_CAMP_LOADED) == 0 && ShowsText("Fast Travel") && FakeGet(Q_BLANK_FRAMES) == 0);
+    Check("...and the text is loaded again", RunUntil([] { return FakeGet(Q_CAMP_LOADED) == 1; }, 90));
+    Press(SPACE);
+    Frames(2);
+    Check("...and it works", FakeGet(Q_MENU_OPEN) == 1);
+    FakeSet(S_MENU, 1);
+    Frames(3);
+    StandUp();
+
+    ResetWorld();
+    Kneel();
+    Check("while the text is loaded: the game's label", RawIs("CAMP_FT_PROMPT") && ShowsText("Fast Travel"));
+    FakeSet(S_CAMP_LOADED, 0);   // something unloads the CAMP text under the kneel menu
+    g_textPulls++;
+    Frames(2);
+    Check("text unloaded under it: Fast Travel switches to the same words as plain text",
+          FakeGet(Q_LIVE_PROMPTS) == 1 && RawIs("~LIT~Fast Travel") && ShowsText("Fast Travel"));
+    Check("...blank for one frame at most", FakeGet(Q_BLANK_FRAMES) <= 1);
+    StandUp();
+    Frames(120);
+
+    ResetWorld();
+    FakeSet(S_CAMP_LOADED, 1);   // loaded by the game already (as with a camp of yours set up elsewhere)
+    {
+        int req = FakeGet(Q_CAMP_REQUESTS), del = FakeGet(Q_CAMP_DELETES);
+        Kneel();
+        StandUp();
+        Frames(150);
+        Check("text the game had loaded: not asked for, and not unloaded afterwards",
+              FakeGet(Q_CAMP_REQUESTS) == req && FakeGet(Q_CAMP_DELETES) == del && FakeGet(Q_CAMP_LOADED) == 1);
+    }
+    FakeSet(S_CAMP_LOADED, 0);
+
+    for (int i = 0; i < 5; i++)
+    {
+        ResetWorld();
+        Kneel();                             // the plugin loads the CAMP text
+        int dels = FakeGet(Q_CAMP_DELETES);
+        FakeSet(S_CAMP_SCRIPT, 1 << i);      // a camp script starts using it
+        StandUp();
+        Frames(150);
+        bool kept = FakeGet(Q_CAMP_LOADED) == 1 && FakeGet(Q_CAMP_DELETES) == dels;
+        FakeSet(S_CAMP_SCRIPT, 0);           // ...and ends (unloading the text itself, if it does)
+        Frames(2);
+        bool after = FakeGet(Q_CAMP_LOADED) == 0 && FakeGet(Q_CAMP_DELETES) == dels + (kCampScriptUnloads[i] ? 0 : 1);
+        char name[160];
+        snprintf(name, sizeof name, "%s running: the text is left loaded for it, then unloaded once, %s",
+                 kCampScripts[i], kCampScriptUnloads[i] ? "by the script itself" : "by the plugin");
+        Check(name, kept && after);
+    }
+
+    ResetWorld();
+    FakeSet(S_CAMP_LOAD_FRAMES, 150);    // the text takes 5 s to come in
+    {
+        int dels = FakeGet(Q_CAMP_DELETES);
+        FakeSet(S_KNEEL, 1);
+        Frames(5);
+        StandUp();                       // up again long before it has loaded
+        Frames(120);                     // past the plugin's 3 s
+        bool waited = FakeGet(Q_CAMP_LOADED) == 0 && FakeGet(Q_CAMP_DELETES) == dels;
+        bool unloaded = RunUntil([dels] { return FakeGet(Q_CAMP_DELETES) == dels + 1; }, 150);
+        Check("a load still under way when the plugin lets go: unloaded once it's in, not left behind",
+              waited && unloaded && FakeGet(Q_CAMP_LOADED) == 0);
+    }
+    FakeSet(S_CAMP_LOAD_FRAMES, 3);
+
+    ResetWorld();
+    FakeHorse(100, 0, 1, 1, 10, 0, 2, 150);   // dead
+    Kneel();
+    Press(SPACE);
+    Frames(2);
+    Check("the game's message (from the CAMP text)", HelpIs("DEAD_HORSE_FT"));
+    StandUp();
+    Frames(120);
+    Check("...the text stays loaded while that message is on screen", FakeGet(Q_CAMP_LOADED) == 1);
+    Frames(150);
+    Check("...and is let go of afterwards", FakeGet(Q_CAMP_LOADED) == 0);
+
+    ResetWorld();
+    FakeSet(S_CAMP_NEVER, 1);
+    FakeHorse(100, 0, 1, 1, 10, 0, 2, 150);   // dead
+    Kneel();
+    Check("a CAMP text that never loads: Fast Travel still shows, as plain text",
+          FakeGet(Q_LIVE_PROMPTS) == 1 && RawIs("~LIT~Fast Travel") && ShowsText("Fast Travel"));
+    Press(SPACE);
+    Frames(2);
+    Check("...and the game's messages come in English", HelpIs("~LIT~You can't fast travel as your horse is dead."));
+    StandUp();
+    FakeSet(S_CAMP_NEVER, 0);
+    Frames(120);
+
+    ResetWorld();
+    FakeSet(S_FRENCH, 1);
+    Kneel();
+    Check("a French game: the label, in French", RawIs("CAMP_FT_PROMPT") && ShowsText("Voyage rapide"));
+    StandUp();
+    Frames(120);
+    FakeSet(S_CAMP_LOAD_FRAMES, 20);
+    Kneel();
+    Check("...and before the text has loaded, the same French words as plain text",
+          RawIs("~LIT~Voyage rapide") && ShowsText("Voyage rapide"));
+    StandUp();
+    FakeSet(S_FRENCH, 0);
+    FakeSet(S_CAMP_LOAD_FRAMES, 3);
+    Kneel();
+    Check("back in English", RawIs("CAMP_FT_PROMPT") && ShowsText("Fast Travel"));
+    StandUp();
 
     Section("Settings");
     WriteIni("Enabled=0\r\n");
@@ -746,6 +1111,9 @@ int main()
         Check("every native got its argument count", FakeGet(Q_BAD_ARGS) == 0, d);
         Check("VAR_STRING always as (10, \"LITERAL_STRING\", text)", FakeGet(Q_BAD_VARSTRING) == 0);
         Check("help texts well formed", FakeGet(Q_BAD_HELP) == 0);
+        snprintf(d, sizeof d, "(%d frames, text pulled from under it %d times)", FakeGet(Q_BLANK_TOTAL), g_textPulls);
+        Check("over the whole run, Fast Travel never sat in the kneel menu without text "
+              "(but for a frame each time the tests pulled the text from under it)", FakeGet(Q_BLANK_TOTAL) <= g_textPulls, d);
     }
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

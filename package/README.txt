@@ -1,4 +1,4 @@
-FAST TRAVEL ANYWHERE  v1.0.0
+FAST TRAVEL ANYWHERE  v1.0.1
 Red Dead Redemption 2 (PC) - Story Mode
 =====================================================================
 
@@ -26,7 +26,7 @@ INSTALL
 2. Copy FastTravelAnywhere.asi and FastTravelAnywhere.ini into it.
 3. Start the game and load Story Mode. A yellow message appears in the
    top-left corner for a few seconds:
-       Fast Travel Anywhere 1.0.0 loaded - hold E to kneel, then Space: Fast Travel
+       Fast Travel Anywhere 1.0.1 loaded - hold E to kneel, then Space: Fast Travel
 
 To uninstall, delete FastTravelAnywhere.asi, FastTravelAnywhere.ini and
 FastTravelAnywhere.log.
@@ -37,7 +37,8 @@ USING IT
 1. Hold E with nothing around you to kneel. The kneel menu appears in the
    bottom-right corner, now with Fast Travel on Space.
 2. Press Space. The game's fast travel menu opens, the same one as at a
-   campfire.
+   campfire. You can press it as soon as it appears: if Arthur is still
+   getting down, the menu opens the moment he's down.
 3. Pick a place. Arthur stands up, the screen fades out, and you arrive at
    the place on your horse. Back out of the menu to stay where you are.
 
@@ -102,8 +103,9 @@ TROUBLESHOOTING
 
 * No Fast Travel in the kneel menu: FastTravelAnywhere.log gets a
   "Kneel menu up." line each time you kneel, with the game's fast travel
-  state, the unlock check and your horse. No such line means the mod
-  didn't see the kneel menu.
+  state, the unlock check and your horse, then a "Fast Travel added to the
+  kneel menu (...)" line that says which text it shows. No such lines mean
+  the mod didn't see the kneel menu.
 
 * Fast Travel is greyed out: press it to see why. The log has a
   "Fast Travel: ..." line with the reason too.
@@ -133,6 +135,18 @@ Before it changes anything, the mod checks that the game's internals match
 the version it was made for. If the game doesn't respond, the mod takes the
 request back and turns itself off until the game restarts. Idle in Red Dead
 Online.
+
+
+CHANGES
+-------
+1.0.1  Fast Travel always shows its name now. It could be missing from the
+       kneel menu, after a trip for example, while Space still worked: its
+       text lives in a part of the game's text that only the camp scripts
+       load, and the mod now loads it itself. Fast Travel also comes up
+       together with the kneel menu's own buttons instead of up to a
+       second later, and goes away with them (after Set Up Camp, for
+       example). Greyed out while the journal or satchel is open.
+1.0.0  First release.
 
 
 RED DEAD ONLINE

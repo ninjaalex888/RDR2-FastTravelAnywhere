@@ -3,10 +3,18 @@
 // natives and script globals Fast Travel Anywhere uses, and runs a model of the
 // two game scripts it works with, written from the decompiled scripts of game
 // build 1491.50:
-//   * dynamic_craft_scenario: the hold-E kneel and its "Resting" prompt group;
+//   * dynamic_craft_scenario: the hold-E kneel, its states and its "Resting"
+//     prompt group, which comes up at the kneel animation's event, before
+//     Arthur is all the way down, with bit 2 of Global_1955830.f_1 (cleared
+//     when it takes its prompts down, but not for an interaction target or
+//     the camera);
 //   * short_update's "PLAYER CAMP FAST TRAVEL" module (func_80): the requests in
-//     Global_43907, its state in Global_43908, the menu, the horse it takes
-//     along and the trip.
+//     Global_43907, its state in Global_43908, the menu and all of its close
+//     checks, the horse it takes along and the trip.
+// And the game's CAMP text block, where the campfire's texts live: loaded on
+// request after a few frames, unloaded by the camp scripts and the Craft menu
+// when they end, gone after a trip (as players found in the game); a prompt
+// whose label isn't loaded shows no text.
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,7 +59,7 @@ enum
     GL_PLAYER = 35, GL_FT_FLAGS = 43907, GL_FT_STATE = 43908, GL_CAMP = 1392040,
     GL_UIBUSY = 1898068, GL_UIBUSY4 = 1898072, GL_ACTIVE_HORSE = 1135, GL_HORSE_SAVES = 1136,
     GL_HORSE_PEDS = 1900383, GL_LODGING = 4644, GL_SESSION = 1572899, GL_UNLOCK_FLOW = 1351050,
-    GL_FLOW_STATUS = 12106, GL_KNEEL_HUD = 1955831,
+    GL_FLOW_STATUS = 12106, GL_KNEEL_HUD = 1955831, GL_MENU_STOP_A = 1357517, GL_MENU_STOP_B = 1935690,
 };
 
 // ---------------------------------------------------------------------------
@@ -118,8 +126,33 @@ struct Sim
     int   noScenarioTask;              // PED_HAS_USE_SCENARIO_TASK false even while kneeling
     int   stuckTravel;                 // the trip never finishes loading (state 5)
     int   modMusicStops;               // the plugin stopped the fast travel music
+    int   downFrames;                  // how long getting down on one knee takes
+    int   eventFrame;                  // when the kneel animation's event fires (frames into getting down)
+    int   downElapsed;                 // frames since he started getting down
+    int   dcState;                     // dynamic_craft_scenario's state (func_6): 0 start, 1 waiting, 2 prompts up, 3 down for a menu
+    int   setCamp;                     // Set Up Camp pressed: 1 just now, 2 done (its prompts gone, the group still drawn)
+    int   campfireHud;                 // a campfire script shows its own prompts (bits 2 and 3)
+    int   hudBroken;                   // the kneel's HUD bit isn't where the plugin looks (another game build)
+    int   notActive;                   // kneeling in the scenario's base, but IS_PED_ACTIVE_IN_SCENARIO(.., 0) false
+    int   campLoaded, campLoadIn;      // the CAMP text block: loaded / frames until a request finishes
+    int   campLoadFrames;              // how long loading it takes
+    int   campNeverLoads;
+    int   campRequests, campDeletes;   // asked for / unloaded through the natives (not by the game's own scripts here)
+    int   scripts;                     // camp scripts running, a bit each (kCampScripts)
+    int   french;                      // the game's language
+    int   labelUnreadable;             // _GET_LABEL_TEXT_2 can't read CAMP_FT_PROMPT
+    int   blankFrames, blankTotal;     // frames the kneel menu showed our prompt without any text
 };
 static Sim g_sim;
+
+// The camp scripts that use the CAMP text, and whether they unload it when they end.
+struct CampScript { const char* name; int unloads; };
+static const CampScript kCampScripts[] =
+{
+    { "player_camp", 1 }, { "interactive_campfire", 1 }, { "property_use_core", 1 },
+    { "campfire_always", 0 },   // only now and then (its func_7 check)
+    { "sleeping_scenario", 0 },
+};
 
 // ---------------------------------------------------------------------------
 // Prompts
@@ -169,6 +202,39 @@ static const char* MakeVarString(const char* s)
     char* b = g_varStrings[g_varNext++ % 16];
     snprintf(b, 300, "~LIT~%s", s ? s : "");
     return b;
+}
+
+// The labels of the CAMP text block the plugin uses, in English and French.
+struct Label { const char* name; const char* en; const char* fr; };
+static const Label kCampLabels[] =
+{
+    { "CAMP_FT_PROMPT", "Fast Travel", "Voyage rapide" },
+    { "DEAD_HORSE_FT",  "You can't fast travel as your horse is dead.", "Votre cheval est mort." },
+    { "FAR_HORSE_FT",   "Your horse is too far away to fast travel.", "Votre cheval est trop loin." },
+    { "NO_HORSE_FT",    "You can't fast travel without your horse.", "Il vous faut votre cheval." },
+    { "NO_REGION_FT",   "Discover more regions to use fast travel. Regions in lockdown are unavailable.", "Decouvrez d'autres regions." },
+};
+
+static bool IsCampBlock(const char* s) { return s && strcmp(s, "CAMP") == 0; }
+
+// The label's text, if the label is loaded right now.
+static const char* LabelText(const char* name)
+{
+    if (!name || !g_sim.campLoaded)
+        return nullptr;
+    for (const Label& l : kCampLabels)
+        if (strcmp(l.name, name) == 0)
+            return g_sim.french ? l.fr : l.en;
+    return nullptr;
+}
+
+// What a prompt shows: its plain text, or its label's text (nothing if the label isn't loaded).
+static const char* ShownText(const char* text)
+{
+    if (strncmp(text, "~LIT~", 5) == 0)
+        return text + 5;
+    const char* t = LabelText(text);
+    return t ? t : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -222,13 +288,35 @@ static int   I(int i) { return (int)(uint32_t)g_args[i]; }
 
 static uint32_t H(const char* s) { return Joaat(s); }
 
-static bool PlayerKneelActive() { return g_sim.kneel == K_KNEEL; }
-
-// The kneel's "Resting" group is drawn this frame (dynamic_craft_scenario state 2).
-static bool KneelGroupDrawn()
+// The kneel: the animation event has fired (he's on his way down), he's all the way down.
+static bool KneelEventFired() { return g_sim.kneel == K_KNEEL || (g_sim.kneel == K_DOWN && g_sim.downElapsed >= g_sim.eventFrame); }
+static bool InScenarioBase()  { return g_sim.kneel == K_KNEEL; }
+static bool HasScenarioTask() { return g_sim.kneel != K_OFF && !g_sim.noScenarioTask; }
+// IS_PED_ACTIVE_IN_SCENARIO(player, p1): p1 = 0 once all the way down; p1 = 1 also on the way down
+// (dynamic_craft_scenario ends if it's false once its prompts are up).
+static bool ActiveInScenario(int p1)
 {
-    return g_sim.kneel == K_KNEEL && !g_sim.interactionTarget && !g_sim.cameraItem &&
-           !g_sim.simpleCrafting && !g_sim.journal && !g_sim.itemInteraction && !g_sim.playerDead;
+    if (p1 == 0)
+        return g_sim.kneel == K_KNEEL && !g_sim.notActive;
+    return KneelEventFired();
+}
+
+// short_update's func_502(1): what keeps its menu open.
+static bool ShortUpdateScenarioOk()
+{
+    return !g_sim.playerDead && HasScenarioTask() && g_sim.kneel != K_EXIT && (InScenarioBase() || ActiveInScenario(0));
+}
+
+static void CampRequest()
+{
+    if (!g_sim.campLoaded && !g_sim.campLoadIn && !g_sim.campNeverLoads)
+        g_sim.campLoadIn = g_sim.campLoadFrames > 0 ? g_sim.campLoadFrames : 1;
+}
+
+static void CampDelete()
+{
+    g_sim.campLoaded = 0;
+    g_sim.campLoadIn = 0;
 }
 
 static void SimFadeOut(int ms)
@@ -323,14 +411,20 @@ uint64_t* FS_nativeCall()
         else if (h == H("CAMERA_ITEM")) n = g_sim.cameraItem;
         else if (h == H("SIMPLE_CRAFTING")) n = g_sim.simpleCrafting;
         else if (h == H("DOC_PLAYER_JOURNAL")) n = g_sim.journal;
+        else
+        {
+            for (int i = 0; i < (int)(sizeof kCampScripts / sizeof kCampScripts[0]); i++)
+                if (h == H(kCampScripts[i].name))
+                    n = (g_sim.scripts >> i) & 1;
+        }
         g_result[0] = (uint32_t)n;
         break;
     }
-    case 0xAA135F9482C82CC3ULL: Want(2); g_result[0] = I(0) == kPlayerPed && PlayerKneelActive(); break;   // IS_PED_ACTIVE_IN_SCENARIO
+    case 0xAA135F9482C82CC3ULL: Want(2); g_result[0] = I(0) == kPlayerPed && ActiveInScenario(I(1)); break;  // IS_PED_ACTIVE_IN_SCENARIO
     case 0x0C3CB2E600C8977DULL: Want(2); g_result[0] = I(0) == kPlayerPed && g_sim.kneel == K_EXIT; break; // IS_PED_EXITING_SCENARIO
     case 0xEC7E480FF8BD0BEDULL: Want(1); g_result[0] = g_sim.itemInteraction; break;                         // IS_PED_RUNNING_TASK_ITEM_INTERACTION
-    case 0x295E3CCEC879CCD7ULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.kneel != K_OFF && !g_sim.noScenarioTask; break; // PED_HAS_USE_SCENARIO_TASK
-    case 0x02EBBB3989B7E695ULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.kneel == K_KNEEL; break;  // _PED_IS_IN_SCENARIO_BASE
+    case 0x295E3CCEC879CCD7ULL: Want(1); g_result[0] = I(0) == kPlayerPed && HasScenarioTask(); break;      // PED_HAS_USE_SCENARIO_TASK
+    case 0x02EBBB3989B7E695ULL: Want(1); g_result[0] = I(0) == kPlayerPed && InScenarioBase(); break;        // _PED_IS_IN_SCENARIO_BASE
     case 0x3EE1F7A8C32F24E1ULL: {                                                         // GET_PLAYER_INTERACTION_TARGET_ENTITY
         Want(4);
         int64_t* out = (int64_t*)(uintptr_t)g_args[1];
@@ -398,6 +492,23 @@ uint64_t* FS_nativeCall()
             g_badHelp++;
         else
             snprintf(g_helps[g_helpCount++ % 64], 300, "%s", (const char*)(uintptr_t)text[1]);
+        break;
+    }
+    case 0xD0976CC34002DB57ULL: Want(1); g_result[0] = IsCampBlock((const char*)(uintptr_t)g_args[0]) && g_sim.campLoaded; break; // TEXT_BLOCK_IS_LOADED
+    case 0xF66090013DE648D5ULL:                                                           // TEXT_BLOCK_REQUEST
+        Want(1);
+        if (IsCampBlock((const char*)(uintptr_t)g_args[0])) { g_sim.campRequests++; CampRequest(); }
+        break;
+    case 0xAA03F130A637D923ULL:                                                           // _TEXT_BLOCK_DELETE
+        Want(1);
+        if (IsCampBlock((const char*)(uintptr_t)g_args[0])) { g_sim.campDeletes++; CampDelete(); }
+        break;
+    case 0x2C729F2B94CEA911ULL: Want(1); g_result[0] = IsCampBlock((const char*)(uintptr_t)g_args[0]); break; // _DOES_TEXT_BLOCK_EXIST
+    case 0x73C258C68D6F55B6ULL: Want(1); g_result[0] = LabelText((const char*)(uintptr_t)g_args[0]) != nullptr; break; // DOES_TEXT_LABEL_EXIST
+    case 0x3429670F9B9EF2D3ULL: {                                                         // _GET_LABEL_TEXT_2
+        Want(1);
+        const char* t = g_sim.labelUnreadable ? nullptr : LabelText((const char*)(uintptr_t)g_args[0]);
+        g_result[0] = (uint64_t)(uintptr_t)(t ? t : "NULL");
         break;
     }
     case 0xA1253A3C870B6843ULL: Want(2); break;                                           // _BG_SET_TEXT_SCALE
@@ -548,7 +659,12 @@ static void ShortUpdateTick()
         if (fl & 16) { fl &= ~16; MenuClose(); st = 0; break; }
         if (HorseDeadOrWrithing(h7) && HorseDeadOrWrithing(h1)) { MenuClose(); st = 0; break; }
         if (!(GI(GL_CAMP) & (1 << 23))) { MenuClose(); st = 0; break; }
-        if (!PlayerKneelActive() || g_sim.playerDead) { MenuClose(); st = 0; break; }  // func_502
+        if (!ShortUpdateScenarioOk() || GI(GL_MENU_STOP_A) || GI(GL_MENU_STOP_B) || GI(GL_UIBUSY))   // func_502 to func_505
+        {
+            MenuClose();
+            st = 0;
+            break;
+        }
         if (g_sim.menuResult == 2) { fl |= 8; MenuClose(); st = 2; }
         else if (g_sim.menuResult == 1) { MenuClose(); st = 0; }
         g_sim.menuResult = 0;
@@ -598,6 +714,7 @@ static void ShortUpdateTick()
         fl = 0;
         st = 0;
         g_sim.trips++;
+        CampDelete();   // after a trip, the CAMP text is gone (as players found in the game)
         break;
     }
     SI(GL_FT_STATE, st);
@@ -613,15 +730,77 @@ extern "C" __declspec(dllexport) void FakeGameTick()
         g_sim.fade = g_sim.fade == 1 ? 2 : 0;
 
     // the kneel: getting down, kneeling, standing up
-    if (g_sim.kneel == K_DOWN && --g_sim.kneelFrames <= 0)
-        g_sim.kneel = K_KNEEL;
+    if (g_sim.kneel == K_DOWN)
+    {
+        g_sim.downElapsed++;
+        if (--g_sim.kneelFrames <= 0)
+            g_sim.kneel = K_KNEEL;
+    }
     else if (g_sim.kneel == K_EXIT && --g_sim.kneelFrames <= 0)
         g_sim.kneel = K_OFF;
 
-    // dynamic_craft_scenario draws its group (and notes it in Global_1955830.f_1 bit 2)
-    g_sim.groupDrawn = KneelGroupDrawn();
+    // the CAMP text block finishes loading
+    if (g_sim.campLoadIn > 0 && --g_sim.campLoadIn == 0)
+        g_sim.campLoaded = 1;
+
+    // dynamic_craft_scenario (its func_6): the prompts go up at the kneel's
+    // animation event and set bit 2 of Global_1955830.f_1 (clearing bit 3).
+    // Going down for a menu clears it; an interaction target or the camera
+    // takes the prompts down without clearing it; Set Up Camp takes them down
+    // and clears it while the group is still drawn.
     int hud = GI(GL_KNEEL_HUD);
-    SI(GL_KNEEL_HUD, g_sim.groupDrawn ? (hud | 4) : (hud & ~4));
+    bool menuUp = g_sim.simpleCrafting || g_sim.journal || g_sim.itemInteraction;
+    if (g_sim.kneel == K_OFF)
+    {
+        if (g_sim.dcState != 0)
+            hud &= ~4;                                      // its cleanup (func_7)
+        g_sim.dcState = 0;
+        g_sim.setCamp = 0;
+    }
+    else
+    {
+        if (g_sim.dcState == 0)
+            g_sim.dcState = 1;
+        if (g_sim.dcState == 1 && KneelEventFired() && !g_sim.interactionTarget && !g_sim.cameraItem &&
+            !g_sim.playerDead && !menuUp)
+        {
+            g_sim.dcState = 2;
+            if (!g_sim.hudBroken)
+                hud = (hud | 4) & ~8;
+        }
+        else if (g_sim.dcState == 2)
+        {
+            if (g_sim.interactionTarget || g_sim.cameraItem)
+                g_sim.dcState = 1;                          // bit 2 left as it is
+            else if (menuUp)
+            {
+                g_sim.dcState = 3;
+                hud &= ~4;
+            }
+            else if (g_sim.setCamp == 1)
+            {
+                g_sim.setCamp = 2;
+                hud &= ~4;
+            }
+        }
+        else if (g_sim.dcState == 3 && !menuUp)
+            g_sim.dcState = 1;
+    }
+    if (g_sim.campfireHud)
+        hud |= 4 | 8;                                       // a campfire's own prompts
+    SI(GL_KNEEL_HUD, hud);
+    g_sim.groupDrawn = g_sim.dcState == 2 && g_sim.kneel != K_EXIT && !g_sim.playerDead;
+
+    // a prompt in the drawn kneel menu without any text to show
+    for (int i = 0; i < 64; i++)
+    {
+        Prompt& p = g_prompts[i];
+        if (p.id && p.valid && p.visible && p.group == 342152817 && g_sim.groupDrawn && !ShownText(p.text)[0])
+        {
+            g_sim.blankFrames++;
+            g_sim.blankTotal++;
+        }
+    }
 
     // input: a press queued by the test is released this frame
     g_sim.pressedNow = (uint32_t)g_sim.pendingPress;
@@ -674,6 +853,8 @@ enum SetWhat
     S_SU_RUNNING, S_SU_IGNORE, S_DESTINATIONS, S_REFUSE, S_SIMFADEIN, S_PLAYERDEAD, S_PRESS, S_MENU,
     S_PLAYERPOS_X, S_PLAYERPOS_Y, S_DEST_X, S_DEST_Y, S_RESET_COUNTERS, S_INVEHICLE, S_ITEMINTERACTION,
     S_MENU_SHOWS, S_MOVE, S_NO_SCENARIO_TASK, S_STUCK_TRAVEL,
+    S_DOWN_FRAMES, S_CAMP_LOADED, S_CAMP_LOAD_FRAMES, S_CAMP_NEVER, S_CAMP_SCRIPT, S_FRENCH, S_CRAFTING,
+    S_SET_CAMP, S_CAMPFIRE_HUD, S_HUD_BROKEN, S_NOT_ACTIVE, S_LABEL_UNREADABLE,
 };
 
 extern "C" __declspec(dllexport) void FakeSet(int what, int v)
@@ -681,8 +862,34 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
     switch (what)
     {
     case S_KNEEL:
-        if (v) { g_sim.kneel = K_DOWN; g_sim.kneelFrames = 10; }
+        if (v) { g_sim.kneel = K_DOWN; g_sim.kneelFrames = g_sim.downFrames; g_sim.downElapsed = 0; g_sim.setCamp = 0; }
         else   { if (g_sim.kneel != K_OFF) { g_sim.kneel = K_EXIT; g_sim.kneelFrames = 10; } }
+        break;
+    case S_DOWN_FRAMES:   g_sim.downFrames = v; break;
+    case S_CAMP_LOADED:   if (v) { g_sim.campLoaded = 1; g_sim.campLoadIn = 0; } else CampDelete(); break;
+    case S_CAMP_LOAD_FRAMES: g_sim.campLoadFrames = v; break;
+    case S_CAMP_NEVER:    g_sim.campNeverLoads = v; break;
+    case S_CAMP_SCRIPT:
+        // camp scripts start or end; those that unload the CAMP text when they end do so
+        for (int i = 0; i < (int)(sizeof kCampScripts / sizeof kCampScripts[0]); i++)
+            if (((g_sim.scripts >> i) & 1) && !((v >> i) & 1) && kCampScripts[i].unloads)
+                CampDelete();
+        g_sim.scripts = v;
+        break;
+    case S_FRENCH:        g_sim.french = v; break;
+    case S_SET_CAMP:      if (v && g_sim.dcState == 2) g_sim.setCamp = 1; break;   // Set Up Camp (E) pressed
+    case S_CAMPFIRE_HUD:
+        g_sim.campfireHud = v;
+        if (!v) SI(GL_KNEEL_HUD, GI(GL_KNEEL_HUD) & ~(4 | 8));   // the campfire takes its prompts down
+        break;
+    case S_HUD_BROKEN:    g_sim.hudBroken = v; if (v) SI(GL_KNEEL_HUD, 0); break;
+    case S_NOT_ACTIVE:    g_sim.notActive = v; break;
+    case S_LABEL_UNREADABLE: g_sim.labelUnreadable = v; break;
+    case S_CRAFTING:
+        // the kneel menu's Craft: simple_crafting loads the CAMP text when it
+        // starts (its func_30) and unloads it when it ends
+        g_sim.simpleCrafting = v;
+        if (v) CampRequest(); else CampDelete();
         break;
     case S_INTERACTION:   g_sim.interactionTarget = v; break;
     case S_CAMERA:        g_sim.cameraItem = v; break;
@@ -713,6 +920,7 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
     case S_RESET_COUNTERS:
         g_sim.modFadeIns = g_sim.modFadeOuts = g_sim.clearTasks = g_sim.kneelExitCmds = 0;
         g_sim.music = g_sim.musicStop = g_sim.menuOpens = g_sim.modMusicStops = 0;
+        g_sim.blankFrames = 0;
         g_helpCount = 0;
         break;
     }
@@ -727,6 +935,7 @@ enum GetWhat
     Q_DISABLED_Y, Q_DISABLED_JUMP, Q_DISABLED_ALL, Q_HELP_COUNT, Q_UNKNOWN, Q_BAD_ARGS, Q_BAD_VARSTRING,
     Q_BAD_HELP, Q_PLAYER_X, Q_PLAYER_Y, Q_TIMESCALE_X10, Q_GAME_MS, Q_LAST_UNKNOWN_LO, Q_LAST_BADARG_LO,
     Q_DISABLED_OTHER, Q_CONTEXT_SETS, Q_PAUSE_ENABLED, Q_MOD_MUSIC_STOPS, Q_PCF_100, Q_PCF_101,
+    Q_GROUP_DRAWN, Q_CAMP_LOADED, Q_CAMP_REQUESTS, Q_CAMP_DELETES, Q_BLANK_FRAMES, Q_BLANK_TOTAL,
 };
 
 static Prompt* CurrentPrompt()
@@ -790,6 +999,12 @@ extern "C" __declspec(dllexport) int FakeGet(int what)
     case Q_MOD_MUSIC_STOPS: return g_sim.modMusicStops;
     case Q_PCF_100:         { Ent* e = FindEnt(100); return e ? e->pcf388 : -1; }
     case Q_PCF_101:         { Ent* e = FindEnt(101); return e ? e->pcf388 : -1; }
+    case Q_GROUP_DRAWN:     return g_sim.groupDrawn;
+    case Q_CAMP_LOADED:     return g_sim.campLoaded;
+    case Q_CAMP_REQUESTS:   return g_sim.campRequests;
+    case Q_CAMP_DELETES:    return g_sim.campDeletes;
+    case Q_BLANK_FRAMES:    return g_sim.blankFrames;
+    case Q_BLANK_TOTAL:     return g_sim.blankTotal;
     }
     return -999;
 }
@@ -816,6 +1031,11 @@ extern "C" __declspec(dllexport) void FakeText(int what, char* out, int n)
             strncat(out, "\n", n - strlen(out) - 1);
         }
         g_textCount = 0;
+    }
+    else if (what == 4)   // what the live prompt shows right now
+    {
+        if (Prompt* p = CurrentPrompt())
+            snprintf(out, n, "%s", ShownText(p->text));
     }
 }
 
@@ -856,6 +1076,9 @@ extern "C" __declspec(dllexport) void FakeInit()
     g_sim.destinations = 6;
     g_sim.timeScale = 1.0f;
     g_sim.destX = 5000; g_sim.destY = 5000;
+    g_sim.downFrames = 30;       // about a second to get down on one knee...
+    g_sim.eventFrame = 8;        // ...and the kneel menu comes up a quarter of a second in
+    g_sim.campLoadFrames = 3;
     SI(GL_PLAYER, kPlayerPed);
     SI(GL_SESSION, -1);
     SI(GL_LODGING, 3);

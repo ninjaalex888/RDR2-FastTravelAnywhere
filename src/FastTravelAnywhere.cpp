@@ -31,8 +31,10 @@
     ---------------------
       * While the kneel menu is up, it adds a Fast Travel prompt to the same
         group, with the campfire's own text ("CAMP_FT_PROMPT"), so it reads
-        "Fast Travel" in your game's language.
-      * Pressing it sets bit 23 and bit 4, as a campfire does.
+        "Fast Travel" in your game's language. That text lives in the game's
+        CAMP text block, which the plugin loads when a kneel starts.
+      * Pressing it sets bit 23 and bit 4, as a campfire does (once Arthur is
+        all the way down: the menu doesn't stay open before that).
       * When you pick a place, it plays the camp's part: Arthur stands up, the
         screen fades out, then it sets bit 32 and the game does the rest.
       * It's greyed out when a campfire wouldn't offer fast travel either (not
@@ -60,7 +62,7 @@
 #endif
 
 #define FTA_NAME    "Fast Travel Anywhere"
-#define FTA_VERSION "1.0.0"
+#define FTA_VERSION "1.0.1"
 
 // ===========================================================================
 // Paths & logging
@@ -508,8 +510,9 @@ namespace N
 
     static inline int  ScriptThreads(uint32_t h) { return Invoke<int>(0x8E34C953364A76DDULL, h); }                // SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH
 
-    // The kneel. dynamic_craft_scenario shows its prompts while
-    // IS_PED_ACTIVE_IN_SCENARIO(player, 0) and the player has no interaction target.
+    // The kneel. dynamic_craft_scenario shows its prompts once the kneel's
+    // animation event fires or IS_PED_ACTIVE_IN_SCENARIO(player, 0), while the
+    // player has no interaction target.
     static inline bool IsPedActiveInScenario(int p) { return Invoke<int>(0xAA135F9482C82CC3ULL, p, 0) != 0; }     // TASK::IS_PED_ACTIVE_IN_SCENARIO
     static inline bool IsPedExitingScenario(int p)  { return Invoke<int>(0x0C3CB2E600C8977DULL, p, 1) != 0; }     // TASK::IS_PED_EXITING_SCENARIO
     static inline bool IsPedRunningItemInteraction(int p) { return Invoke<int>(0xEC7E480FF8BD0BEDULL, p) != 0; } // TASK::IS_PED_RUNNING_TASK_ITEM_INTERACTION
@@ -546,6 +549,12 @@ namespace N
     { return Invoke<const char*>(0xFA925AC00EB830B9ULL, 10, "LITERAL_STRING", text); }                           // MISC::VAR_STRING
     static inline int  PostHelpText(int64_t* data, int64_t* text, int immediately)
     { return Invoke<int>(0x049D5C615BD38BADULL, data, text, immediately); }                                       // UIFEED::_UI_FEED_POST_HELP_TEXT
+    static inline bool TextBlockIsLoaded(const char* b)       { return Invoke<int>(0xD0976CC34002DB57ULL, b) != 0; } // HUD::TEXT_BLOCK_IS_LOADED
+    static inline void TextBlockRequest(const char* b)        { InvokeVoid(0xF66090013DE648D5ULL, b); }           // HUD::TEXT_BLOCK_REQUEST
+    static inline void TextBlockDelete(const char* b)         { InvokeVoid(0xAA03F130A637D923ULL, b); }           // HUD::_TEXT_BLOCK_DELETE
+    static inline bool DoesTextBlockExist(const char* b)      { return Invoke<int>(0x2C729F2B94CEA911ULL, b) != 0; } // HUD::_DOES_TEXT_BLOCK_EXIST
+    static inline bool DoesTextLabelExist(const char* l)      { return Invoke<int>(0x73C258C68D6F55B6ULL, l) != 0; } // HUD::DOES_TEXT_LABEL_EXIST
+    static inline const char* LabelText(const char* l)        { return Invoke<const char*>(0x3429670F9B9EF2D3ULL, l); } // HUD::_GET_LABEL_TEXT_2
     static inline void BgSetTextScale(float sx, float sy)     { InvokeVoid(0xA1253A3C870B6843ULL, sx, sy); }      // UIDEBUG::_BG_SET_TEXT_SCALE
     static inline void BgSetTextColor(int r, int g, int b, int a) { InvokeVoid(0x16FA5CE47F184F1EULL, r, g, b, a); } // UIDEBUG::_BG_SET_TEXT_COLOR
     static inline void BgDisplayText(const char* vs, float x, float y) { InvokeVoid(0x16794E044C9EFB58ULL, vs, x, y); } // UIDEBUG::_BG_DISPLAY_TEXT
@@ -623,9 +632,9 @@ namespace G
     static const int kSession     = 1572899;  // Global_1572887.f_12: -1 in Story Mode
     static const int kUnlockFlow  = 1351050;  // Global_1347702[68 /*49*/].f_15: the flow behind the other unlock (func_339(68))
     static const int kFlowStatus  = 12106;    // Global_12106[flow /*7*/].f_1: flow status, 5 or 6 = done
-    static const int kKneelHud    = 1955831;  // Global_1955830.f_1: bit 2 set by the kneel and campfire prompts (diagnostics only)
-    static const int kMenuStopA   = 1357517;  // Global_1357517: short_update closes the menu when set (func_503; diagnostics only)
-    static const int kMenuStopB   = 1935690;  // Global_1935689.f_1: likewise (func_504; diagnostics only)
+    static const int kKneelHud    = 1955831;  // Global_1955830.f_1: bit 2 = the kneel's prompts are up (bits 2+3: a campfire's)
+    static const int kMenuStopA   = 1357517;  // Global_1357517: short_update closes the menu while set (func_503)
+    static const int kMenuStopB   = 1935690;  // Global_1935689.f_1: likewise (func_504)
 
     // Bits of kFtFlags (short_update func_80)
     static const int FT_MUSIC  = 1;   // play the fast travel music
@@ -685,6 +694,7 @@ namespace G
 static const int kRestGroup = 342152817; // the kneel menu's prompt group ("REST_UI_GROUP")
 
 static uint32_t H_DYNAMIC_CRAFT, H_SHORT_UPDATE, H_CAMERA_ITEM, H_SIMPLE_CRAFTING, H_JOURNAL;
+static uint32_t H_PLAYER_CAMP, H_INTERACTIVE_CAMPFIRE, H_PROPERTY_USE, H_CAMPFIRE_ALWAYS, H_SLEEPING;
 static uint32_t H_FAST_TRAVEL_MENU, H_PLAYER_MENU;
 static uint32_t H_INPUT_CONTEXT_X, H_INPUT_CONTEXT_Y, H_INPUT_JUMP;
 static uint32_t H_INPUT_MOVE_LR, H_INPUT_MOVE_UD, H_FRONTEND_PAUSE, H_FRONTEND_PAUSE_ALT, H_CTX_FRONTEND_MENU;
@@ -697,6 +707,11 @@ static void InitHashes()
     H_CAMERA_ITEM      = Joaat("CAMERA_ITEM");
     H_SIMPLE_CRAFTING  = Joaat("SIMPLE_CRAFTING");
     H_JOURNAL          = Joaat("DOC_PLAYER_JOURNAL");
+    H_PLAYER_CAMP      = Joaat("player_camp");
+    H_INTERACTIVE_CAMPFIRE = Joaat("interactive_campfire");
+    H_PROPERTY_USE     = Joaat("property_use_core");
+    H_CAMPFIRE_ALWAYS  = Joaat("campfire_always");
+    H_SLEEPING         = Joaat("sleeping_scenario");
     H_FAST_TRAVEL_MENU = Joaat("FAST_TRAVEL_MENU");
     H_PLAYER_MENU      = Joaat("PLAYER_MENU");
     H_INPUT_CONTEXT_X  = Joaat("INPUT_CONTEXT_X");
@@ -708,6 +723,107 @@ static void InitHashes()
     H_FRONTEND_PAUSE_ALT = Joaat("INPUT_FRONTEND_PAUSE_ALTERNATE");
     H_CTX_FRONTEND_MENU  = Joaat("FrontendMenu");
     H_KNEEL_EXIT       = Joaat("DYNAMIC_KNEEL_SLOW_EXIT");
+}
+
+// ===========================================================================
+// The game's texts: the CAMP text block
+// ===========================================================================
+//
+// The campfire's texts (the Fast Travel prompt CAMP_FT_PROMPT, the horse and
+// region messages, the fast travel menu's heading) live in the game's CAMP
+// text block. Only the camp scripts load it (player_camp, interactive_campfire,
+// property_use_core, campfire_always, each unloading it when it's done; and
+// long_update, again and again while a campfire you left is still burning),
+// and the kneel menu's own Craft menu (simple_crafting) loads it when it opens
+// and unloads it when it closes. A prompt whose label isn't loaded has no
+// text, and the game doesn't draw it, although its button still works. So the
+// plugin
+//   * asks for CAMP as soon as a kneel starts, and lets it go again once the
+//     kneel is over, if the plugin loaded it and nothing else is using it (as
+//     simple_crafting does);
+//   * uses the label only while it's loaded, and otherwise the same words as
+//     plain text: the game's own, read from the label while it was loaded, or
+//     English until then.
+
+static const char kCampText[]  = "CAMP";
+static const char kFtLabel[]   = "CAMP_FT_PROMPT";   // "Fast Travel"
+static const char kFtEnglish[] = "Fast Travel";
+
+static bool g_campTextOurs      = false;  // the plugin loaded it
+static int  g_campTextAskedAt   = -1;     // when the plugin last asked for it
+static bool g_campTextSeen      = false;  // seen loaded since then
+static int  g_campTextHoldUntil = 0;      // a help text with a CAMP label is on screen until then
+static char g_ftText[64]        = "";     // the game's own words for CAMP_FT_PROMPT, in its language
+
+static bool CampTextLoaded()
+{
+    return N::TextBlockIsLoaded(kCampText);
+}
+
+// A label from the CAMP text can be shown right now.
+static bool CampLabelReady(const char* label)
+{
+    return CampTextLoaded() && N::DoesTextLabelExist(label);
+}
+
+static void RequestCampText(int now)
+{
+    if (CampTextLoaded())
+    {
+        g_campTextSeen = true;
+        return;
+    }
+    if (!N::DoesTextBlockExist(kCampText))
+        return;
+    // Asked again at once if it was loaded and has gone since (the Craft menu
+    // unloads it); while a request is still loading, every 1.5 s at most.
+    if (g_campTextAskedAt < 0 || g_campTextSeen || now - g_campTextAskedAt > 1500)
+    {
+        N::TextBlockRequest(kCampText);
+        if (g_campTextAskedAt < 0)
+            Log("Loading the game's CAMP text (the \"Fast Travel\" label).");
+        g_campTextAskedAt = now;
+        g_campTextSeen = false;
+        g_campTextOurs = true;
+    }
+}
+
+static void ReleaseCampText(int now)
+{
+    if (!g_campTextOurs || now - g_campTextHoldUntil < 0)
+        return;
+    // Something else is using it now. The camp scripts and the Craft menu
+    // unload it themselves when they're done.
+    if (N::ScriptThreads(H_PLAYER_CAMP) > 0 || N::ScriptThreads(H_INTERACTIVE_CAMPFIRE) > 0 ||
+        N::ScriptThreads(H_PROPERTY_USE) > 0 || N::ScriptThreads(H_CAMPFIRE_ALWAYS) > 0 ||
+        N::ScriptThreads(H_SIMPLE_CRAFTING) > 0 || N::ScriptThreads(H_SLEEPING) > 0)
+        return;
+    if (CampTextLoaded())
+    {
+        N::TextBlockDelete(kCampText);
+        if (g_cfg.debugLog)
+            Log("Unloaded the CAMP text again.");
+    }
+    else if (!g_campTextSeen && g_campTextAskedAt >= 0 && now - g_campTextAskedAt < 10000)
+        return;   // the request is still loading: unload it once it's in, rather than leave it behind
+    g_campTextOurs = false;
+    g_campTextAskedAt = -1;
+    g_campTextSeen = false;
+}
+
+// Keep the game's own words for "Fast Travel", in the game's language
+// (call while CampLabelReady(kFtLabel)). False if they couldn't be read.
+static bool ReadFtText()
+{
+    const char* s = N::LabelText(kFtLabel);
+    if (!s || !s[0] || strlen(s) >= sizeof g_ftText || strcmp(s, "NULL") == 0 || strcmp(s, kFtLabel) == 0)
+        return false;
+    if (strcmp(s, g_ftText) != 0)
+    {
+        snprintf(g_ftText, sizeof g_ftText, "%s", s);
+        Log("The game's text for Fast Travel: \"%s\".", g_ftText);
+    }
+    return true;
 }
 
 // ===========================================================================
@@ -739,14 +855,19 @@ static void DrawNotification()
 // The game's help box (top left), as the camp scripts post it (their func_58):
 // a duration struct and a text struct whose second field is the text, either a
 // text label from the game (shown in the game's language) or a VAR_STRING.
+// label is one of the CAMP text's, used only while it's loaded; otherwise the
+// same words go in as plain English text.
 static void HelpText(const char* label, const char* literal)
 {
     int64_t data[4] = { 8000, 0, 0, 0 };
     int64_t text[2] = { 0, 0 };
-    const char* s = label ? label : N::VarStringLiteral(literal);
+    bool useLabel = label && CampLabelReady(label);
+    const char* s = useLabel ? label : N::VarStringLiteral(literal);
     text[1] = (int64_t)(intptr_t)s;
     N::PostHelpText(data, text, 1);
-    Log("Help text: %s", label ? label : literal);
+    if (useLabel)
+        g_campTextHoldUntil = N::GameTimer() + 8500;   // keep the text loaded while it's on screen
+    Log("Help text: %s%s", useLabel ? label : literal, (label && !useLabel) ? " (label not loaded)" : "");
 }
 
 // ===========================================================================
@@ -797,9 +918,9 @@ static void ShowReason(int r)
 {
     switch (r)
     {
-    case R_HORSE_DEAD: HelpText("DEAD_HORSE_FT", nullptr); break;  // "You can't fast travel as your horse is dead."
-    case R_HORSE_FAR:  HelpText("FAR_HORSE_FT", nullptr); break;   // "Your horse is too far away to fast travel."
-    case R_NO_HORSE:   HelpText("NO_HORSE_FT", nullptr); break;    // "You can't fast travel without your horse."
+    case R_HORSE_DEAD: HelpText("DEAD_HORSE_FT", "You can't fast travel as your horse is dead."); break;
+    case R_HORSE_FAR:  HelpText("FAR_HORSE_FT", "Your horse is too far away to fast travel."); break;
+    case R_NO_HORSE:   HelpText("NO_HORSE_FT", "You can't fast travel without your horse."); break;
     case R_LOCKED:
         HelpText(nullptr, "You haven't unlocked fast travel yet. It opens up the same way as at your camp "
                           "(for Arthur: the lodging upgrade in the camp ledger).");
@@ -967,6 +1088,13 @@ static int HorseCheck(int ped, HorseInfo* activeOut, HorseInfo* slot1Out)
     return R_NO_HORSE;
 }
 
+// Arthur is all the way down in the kneel: what short_update needs to keep its
+// menu open (func_502(1): in the scenario's base, or active in the scenario).
+static bool FullyKneeling(int ped)
+{
+    return N::IsPedActiveInScenario(ped) || N::PedIsInScenarioBase(ped);
+}
+
 // Everything a campfire checks before it offers Fast Travel (player_camp
 // func_105 and func_306), in the order the reasons are reported.
 static int Availability(int ped, int player)
@@ -992,26 +1120,45 @@ static int Availability(int ped, int player)
         return R_WANTED;
     if (N::IsPedInAnyVehicle(ped) || N::IsPedInAnyTrain(ped) || N::IsPedOnMount(ped))
         return R_VEHICLE;
+    // short_update would close the menu straight away (func_502). The kneel is a
+    // use-scenario task from its first frame (dynamic_craft_scenario ends as
+    // soon as the player isn't using a scenario); being all the way down, the
+    // other half of func_502, is what a press waits for.
     if (!N::PedHasUseScenarioTask(ped))
-        return R_NO_SCENARIO;   // short_update would close the menu straight away (func_502)
+        return R_NO_SCENARIO;
     int horse = HorseCheck(ped, nullptr, nullptr);
     if (horse != R_OK)
         return horse;
+    // A game menu is up, or short_update would close the menu (func_503, func_504).
     if (N::IsUiAppActive(H_PLAYER_MENU) || G::Int(G::kUiBusy, 0) != 0 || G::Int(G::kUiBusy4, 0) != 0 ||
-        !N::CanLaunchUiApp(H_FAST_TRAVEL_MENU))
+        G::Int(G::kMenuStopA, 0) != 0 || G::Int(G::kMenuStopB, 0) != 0 || !N::CanLaunchUiApp(H_FAST_TRAVEL_MENU))
         return R_BUSY;
     return R_OK;
 }
 
-// The kneel menu is up: the conditions under which dynamic_craft_scenario
-// draws its "Resting" prompts (its func_6, state 1 -> 2).
+// The kneel menu is up. dynamic_craft_scenario shows its "Resting" prompts as
+// soon as the kneel animation's event fires, before Arthur is all the way down
+// (its func_6, state 1 -> 2), and marks that with bit 2 of Global_1955830.f_1
+// (the campfire scripts set bits 2 and 3 for their own prompts; the kneel
+// clears 3). It clears bit 2 again when it takes its prompts down for the
+// Craft menu, the journal, Set Up Camp and the like, though not for an
+// interaction target or the camera (checked below). Should the bit never show
+// in a kneel (a game build with the globals elsewhere), fully kneeling counts,
+// as in 1.0.0.
+static bool g_kneelHudSeen = false;   // bit 2 seen in this kneel
+
 static bool KneelMenuUp(int ped, int player)
 {
     if (N::ScriptThreads(H_DYNAMIC_CRAFT) <= 0)
         return false;
     if (N::IsEntityDead(ped))
         return false;
-    if (!N::IsPedActiveInScenario(ped) || N::IsPedExitingScenario(ped))
+    int hud = G::Int(G::kKneelHud, 0);
+    if (hud & 4)
+        g_kneelHudSeen = true;
+    bool kneelBit  = (hud & 4) != 0 && (hud & 8) == 0;
+    bool promptsUp = kneelBit || (!g_kneelHudSeen && N::IsPedActiveInScenario(ped));
+    if (!promptsUp || N::IsPedExitingScenario(ped))
         return false;
     if (N::PlayerHasInteractionTarget(player))
         return false;
@@ -1027,8 +1174,18 @@ static bool KneelMenuUp(int ped, int player)
 // The Fast Travel prompt
 // ===========================================================================
 
+// What the prompt's text is.
+enum PromptTextKind
+{
+    PT_CUSTOM,   // PromptText from the .ini
+    PT_LABEL,    // the game's label CAMP_FT_PROMPT (needs the CAMP text loaded)
+    PT_LITERAL,  // the game's own words for it, read from the label earlier, as plain text
+    PT_ENGLISH,  // "Fast Travel" in English, until the game's own words can be read
+};
+
 static int      g_prompt        = 0;
 static int      g_promptEnabled = -1;
+static int      g_promptKind    = PT_LABEL;
 static uint32_t g_control       = 0;   // the control the prompt uses (PromptControl, checked)
 
 static void DeletePrompt()
@@ -1045,7 +1202,9 @@ static void DeletePrompt()
 // Built the way the game builds a campfire's Fast Travel prompt (player_camp
 // func_158 -> func_53, mode 2: a tap that fires on release), with the priority
 // the kneel menu gives its own prompts (1), then put in the kneel menu's group
-// (dynamic_craft_scenario func_20).
+// (dynamic_craft_scenario func_20). Its text: PromptText if set, else the
+// campfire's own label while the CAMP text is loaded, else the same words as
+// plain text.
 static void CreatePrompt()
 {
     uint32_t control = g_cfg.promptControl;
@@ -1058,12 +1217,37 @@ static void CreatePrompt()
     }
     g_control = control;
 
+    const char* text;
+    const char* how;
+    if (g_cfg.promptText[0])
+    {
+        g_promptKind = PT_CUSTOM;
+        text = N::VarStringLiteral(g_cfg.promptText);
+        how  = "PromptText";
+    }
+    else if (CampLabelReady(kFtLabel))
+    {
+        ReadFtText();
+        g_promptKind = PT_LABEL;
+        text = kFtLabel;
+        how  = "the game's label";
+    }
+    else if (g_ftText[0])
+    {
+        g_promptKind = PT_LITERAL;
+        text = N::VarStringLiteral(g_ftText);
+        how  = "the game's text, its label isn't loaded";
+    }
+    else
+    {
+        g_promptKind = PT_ENGLISH;
+        text = N::VarStringLiteral(kFtEnglish);
+        how  = "English text, the game's label isn't loaded yet";
+    }
+
     int p = N::PromptRegisterBegin();
     N::PromptSetControlAction(p, control);
-    if (g_cfg.promptText[0])
-        N::PromptSetText(p, N::VarStringLiteral(g_cfg.promptText));
-    else
-        N::PromptSetText(p, "CAMP_FT_PROMPT");   // the campfire's own label: "Fast Travel"
+    N::PromptSetText(p, text);
     N::PromptSetPriority(p, 1);
     N::PromptSetTransportMode(p, 0);
     N::PromptSetAttribute(p, 18, 1);
@@ -1074,8 +1258,29 @@ static void CreatePrompt()
     N::PromptSetEnabled(p, 1);
     g_prompt = p;
     g_promptEnabled = 1;
-    if (g_cfg.debugLog)
-        Log("Prompt %d added to the kneel menu.", p);
+    Log("Fast Travel added to the kneel menu (%s).", how);
+}
+
+// Keep the prompt's text showing (once per frame while it's up). Should the
+// CAMP text be unloaded under it (any script can), the same prompt comes back
+// with its words as plain text. And English stands in only until the game's
+// own words can be read.
+static void CheckPromptText()
+{
+    if (!g_prompt || !N::PromptIsValid(g_prompt))
+        return;
+    if (g_promptKind == PT_LABEL && !CampLabelReady(kFtLabel))
+    {
+        Log("The CAMP text was unloaded: Fast Travel now shows its text without the label.");
+        DeletePrompt();
+    }
+    else if (g_promptKind == PT_ENGLISH && CampLabelReady(kFtLabel))
+    {
+        if (ReadFtText() && strcmp(g_ftText, kFtEnglish) == 0)
+            g_promptKind = PT_LITERAL;    // the same words: nothing to change
+        else
+            DeletePrompt();               // back right away with the game's label
+    }
 }
 
 // ===========================================================================
@@ -1290,7 +1495,7 @@ static void FlowTick(int now, int ped)
             // (short_update func_495 found nothing): the game's own message.
             RestoreCampBit();
             Log("The game found no place to fast travel to.");
-            HelpText("NO_REGION_FT", nullptr);  // "Discover more regions to use fast travel. ..."
+            HelpText("NO_REGION_FT", "Discover more regions to use fast travel. Regions in lockdown are unavailable.");
             SetPhase(PH_IDLE, now);
             break;
         }
@@ -1337,13 +1542,14 @@ static void FlowTick(int now, int ped)
             }
             break;
         }
-        RestoreCampBit();
         if (st == 0 || st < 0)
         {
-            LogMenuClosed(now, ped);
+            LogMenuClosed(now, ped);   // before the camp bit goes back: the log shows it as the game saw it
+            RestoreCampBit();
             SetPhase(PH_IDLE, now);
             break;
         }
+        RestoreCampBit();
         // st 2: a place was chosen. Now the camp's part (player_camp state 13):
         // the camp starts the fast travel music (bit 1) with its animation,
         // and the screen fades out.
@@ -1463,6 +1669,17 @@ static int  g_lastReason  = -1;
 static int  g_lastHelpAt  = -100000;
 static int  g_lastHelpWhy = -1;
 static int  g_iniCheckAt  = 0;
+static int  g_kneelSeenAt = -100000;  // last time a kneel was going on
+static int  g_pressAt     = -1;       // Fast Travel pressed, the menu not opened yet: when
+
+// The fast travel menu can open: Arthur is all the way down (short_update
+// closes its menu until then, func_502), and the CAMP text is in, since the
+// menu's own heading comes from it (CAMP_FT_HEADER, CAMP_FT_SUB). The text is
+// waited for 1 s at most.
+static bool ReadyForMenu(int ped, int now)
+{
+    return FullyKneeling(ped) && (CampTextLoaded() || now - g_pressAt > 1000);
+}
 
 static void LogKneelDetails(int ped)
 {
@@ -1471,19 +1688,43 @@ static void LogKneelDetails(int ped)
     HorseInfo a, b;
     int horse = HorseCheck(ped, &a, &b);
     int hud = G::Int(G::kKneelHud, 0);
-    Log("Kneel menu up. Game fast travel state %d, flags %d, camp bit 23 %d, kneel prompts bit %d; "
-        "unlocked %d (lodging %d, flow status %d); horse: %s",
+    Log("Kneel menu up. Game fast travel state %d, flags %d, camp bit 23 %d, kneel prompts bit %d, all the way "
+        "down %d, CAMP text %s; unlocked %d (lodging %d, flow status %d); horse: %s",
         G::Int(G::kFtState, -1), G::Int(G::kFtFlags, -1),
-        (G::Int(G::kCampFlags, 0) & G::CAMP_AT_FIRE) ? 1 : 0, (hud >> 2) & 1,
-        unlocked, lodging, flow, ReasonName(horse));
+        (G::Int(G::kCampFlags, 0) & G::CAMP_AT_FIRE) ? 1 : 0, (hud >> 2) & 1, FullyKneeling(ped) ? 1 : 0,
+        CampTextLoaded() ? "loaded" : "not loaded", unlocked, lodging, flow, ReasonName(horse));
     Log("  active horse: slot %d ped %d %s, %.1f m, whistle range %.1f m; slot 1: ped %d %s, %.1f m, range %.1f m",
         a.slot, a.ped, !a.exists ? "none" : a.dead ? "dead" : "alive", a.dist, a.range,
         b.ped, !b.exists ? "none" : b.dead ? "dead" : "alive", b.dist, b.range);
 }
 
+static void DropPress(const char* why)
+{
+    if (g_pressAt < 0)
+        return;
+    g_pressAt = -1;
+    Log("Fast Travel: dropped the press, the menu didn't open (%s).", why);
+}
+
 static void IdleTick(int now, int ped, int player)
 {
-    bool up = g_cfg.enabled && KneelMenuUp(ped, player);
+    // A kneel has started (dynamic_craft_scenario runs from its first moment):
+    // load the CAMP text now, so the label is ready by the time the kneel menu
+    // shows its prompts. Let it go again a while after the kneel is over.
+    bool kneeling = g_cfg.enabled && N::ScriptThreads(H_DYNAMIC_CRAFT) > 0 && !N::IsEntityDead(ped);
+    if (kneeling)
+    {
+        g_kneelSeenAt = now;
+        RequestCampText(now);
+    }
+    else
+    {
+        g_kneelHudSeen = false;   // the next kneel starts afresh
+        if (now - g_kneelSeenAt > 3000)
+            ReleaseCampText(now);
+    }
+
+    bool up = kneeling && KneelMenuUp(ped, player);
     if (up != g_kneelUp)
     {
         g_kneelUp = up;
@@ -1528,6 +1769,7 @@ static void IdleTick(int now, int ped, int player)
 
     if (!up)
     {
+        DropPress("the kneel menu closed");
         DeletePrompt();
         return;
     }
@@ -1539,12 +1781,39 @@ static void IdleTick(int now, int ped, int player)
         g_lastReason = r;
     }
 
+    // The kneel menu shows its prompts before Arthur is all the way down, but
+    // short_update closes its menu straight away until he is (func_502). So a
+    // press from before then goes in once he's down (see ReadyForMenu).
+    if (g_pressAt >= 0)
+    {
+        if (r != R_OK)
+        {
+            DropPress(ReasonName(r));
+            g_lastHelpAt = now;
+            g_lastHelpWhy = r;
+            ShowReason(r);
+        }
+        else if (ReadyForMenu(ped, now))
+        {
+            Log("Ready %.1f s after the press: opening the fast travel menu.", (now - g_pressAt) / 1000.0);
+            g_pressAt = -1;
+            StartRequest(now);
+            return;
+        }
+        else if (now - g_pressAt > 3000)
+            DropPress("Arthur wasn't all the way down 3 s later");
+    }
+
     if (r != R_OK && !g_cfg.showWhenUnavailable)
     {
         DeletePrompt();
         return;
     }
 
+    // The press, read before the prompt might be replaced below.
+    bool pressed = g_prompt && N::PromptIsValid(g_prompt) && N::PromptIsJustReleased(g_prompt);
+
+    CheckPromptText();
     if (!g_prompt || !N::PromptIsValid(g_prompt))
     {
         g_prompt = 0;
@@ -1562,8 +1831,19 @@ static void IdleTick(int now, int ped, int player)
 
     if (r == R_OK)
     {
-        if (N::PromptIsJustReleased(g_prompt))
-            StartRequest(now);
+        if (pressed && g_pressAt < 0)
+        {
+            g_pressAt = now;
+            if (ReadyForMenu(ped, now))
+            {
+                g_pressAt = -1;
+                StartRequest(now);
+            }
+            else if (!FullyKneeling(ped))
+                Log("Fast Travel pressed while Arthur is still getting down: the menu opens once he's down.");
+            else
+                Log("Fast Travel pressed: the menu opens once the CAMP text is in (the menu's heading).");
+        }
     }
     else if (N::IsDisabledControlJustReleased(g_control) && (r != g_lastHelpWhy || now - g_lastHelpAt > 1500))
     {
@@ -1602,6 +1882,10 @@ static void ScriptMain()
                 RestoreCampBit();
                 g_phase = PH_IDLE;
                 g_kneelUp = false;
+                g_pressAt = -1;
+                g_campTextOurs = false;   // Red Dead Online has its own camps: leave the text to it
+                g_campTextAskedAt = -1;
+                g_campTextSeen = false;
             }
         }
 
