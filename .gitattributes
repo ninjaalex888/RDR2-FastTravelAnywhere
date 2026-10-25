@@ -1,0 +1,8 @@
+* text=auto
+*.cpp text
+*.sh text eol=lf
+build_msvc.bat text eol=crlf
+package/README.txt text eol=crlf
+*.asi binary
+*.dll binary
+*.zip binary
