@@ -48,6 +48,9 @@ enum SetWhat
     S_MINIGAME, S_ANIMAL_INTERACTION, S_CAMP_SCRIPT_EXISTS, S_CAMP_SCRIPT_NO_LOAD, S_CAMP_FAILS, S_CAMP_DOWN,
     S_EVELYN, S_ON_VEHICLE, S_RAGDOLL, S_IN_BOAT, S_RIDING_TRAIN, S_JACKING, S_KIT_CAMP_OFF, S_KIT_SIMPLE_OFF,
     S_CAMP_SCRIPT_LOAD_FRAMES,
+    S_WP_ACTIVE, S_WP_X, S_WP_Y, S_GPS_FOUND, S_GPS_LEN, S_GPS_ROAD, S_ROAD_X, S_ROAD_Y, S_ROAD_Z, S_DEST_GROUND,
+    S_NO_GROUND, S_COLL_NEVER, S_SCENE_NEVER, S_SAFE_OK, S_PLAYERPOS_Z, S_HORSE_UNMOUNTABLE, S_CLOCK,
+    S_HORSE_HITCHED,
 };
 // The camp scripts the fake knows, in the bit order of S_CAMP_SCRIPT, and whether they unload the CAMP text when they end.
 static const char* const kCampScripts[] = { "player_camp", "interactive_campfire", "property_use_core", "campfire_always", "sleeping_scenario" };
@@ -67,6 +70,9 @@ enum GetWhat
     Q_CAMP_STARTS, Q_GAME_CAMP_STARTS, Q_CAMP_ARGC, Q_CAMP_STACK, Q_CAMP_RUNNING, Q_SCRIPT_REQUESTS,
     Q_NO_LONGER_NEEDED, Q_BAD_SCRIPT_CALLS, Q_BAD_INVENTORY, Q_DISABLED_B, Q_DISABLED_A, Q_CAMP_KNEEL_EXITS,
     Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS, Q_DISABLED_ASK_P2,
+    Q_PLAYER_Z, Q_FROZEN, Q_INVINCIBLE, Q_SCENE_ACTIVE, Q_SCENE_STARTS, Q_MOUNTS, Q_CLOCK_ADDED, Q_CLOCK,
+    Q_GPS_ASKS, Q_GPS_ASK_Z0, Q_GPS_ASK_Z1, Q_BAD_SAFE_FLAGS, Q_H101_X, Q_H101_Y, Q_H100_X, Q_H100_Y,
+    Q_HORSE_UNTARGETTABLE, Q_COLL_REQUESTS, Q_CAM_HEADINGS, Q_PLAYER_HEADING, Q_H100_HEADING, Q_H100_UNHITCHES,
     Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 enum { K_OFF = 0, K_DOWN, K_KNEEL, K_EXIT };
@@ -248,6 +254,17 @@ static void ResetWorld()
     FakeSet(S_KIT_CAMP_OFF, 0);
     FakeSet(S_KIT_SIMPLE_OFF, 0);
     FakeSet(S_CAMP_SCRIPT_LOAD_FRAMES, 3);
+    // Waypoint travel: no waypoint; the ground away from home at 150 m
+    FakeSet(S_WP_ACTIVE, 0);
+    FakeSet(S_GPS_FOUND, 0);
+    FakeSet(S_GPS_ROAD, 0);
+    FakeSet(S_DEST_GROUND, 150);
+    FakeSet(S_NO_GROUND, 0);
+    FakeSet(S_COLL_NEVER, 0);
+    FakeSet(S_SCENE_NEVER, 0);
+    FakeSet(S_SAFE_OK, 1);
+    FakeSet(S_PLAYERPOS_Z, 0);
+    FakeSet(S_HORSE_UNMOUNTABLE, 0);
     static const int zero[] = { GL_CAMP_FLAGS2, GL_CAMP_IS_UP, GL_ZONE, GL_ZONE_AREA, GL_DISTRICT, GL_STORY_CAMP,
                                 GL_ON_MISSION, GL_MISSION_CAMP, GL_ENCOUNTER, GL_AMBUSH, GL_HORSE_AWAY, GL_LED_HORSE,
                                 GL_CAMP_FLOW120, GL_CAMP_FLOW15, GL_ITEM_USE_OFF, GL_CAMP_FORCED, GL_INV_FLAG_A,
@@ -310,6 +327,30 @@ static void CampRule(const char* name, Fn on, Fn off, const char* why)
     Check(n, none && says && back, d);
 }
 
+// A waypoint 5 km away (3000, 4000), the GPS route to it found (6.5 km), the
+// road nearest it 100 m south of it at 150 m up.
+static void SetWaypoint(bool road = true)
+{
+    FakeSet(S_WP_ACTIVE, 1);
+    FakeSet(S_WP_X, 3000);
+    FakeSet(S_WP_Y, 4000);
+    FakeSet(S_GPS_FOUND, 1);
+    FakeSet(S_GPS_LEN, 6500);
+    FakeSet(S_GPS_ROAD, road ? 1 : 0);
+    FakeSet(S_ROAD_X, 3000);
+    FakeSet(S_ROAD_Y, 3900);
+    FakeSet(S_ROAD_Z, 150);
+}
+
+// A trip to the waypoint, all the way: until the plugin has let go and the screen is back.
+static bool TripDone(int maxFrames)
+{
+    static int before;
+    before = LogCount("Waypoint travel: done.");
+    return RunUntil([] { return FakeGet(Q_FADE) == 0 && FakeGet(Q_FROZEN) == 0 &&
+                                LogCount("Waypoint travel: done.") > before; }, maxFrames);
+}
+
 // The press goes through to player_camp; waits until it has Arthur up.
 static bool CampRuns()
 {
@@ -364,14 +405,16 @@ int main()
     {
         char t[4096];
         FakeText(3, t, sizeof t);
-        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.1.0 loaded") != nullptr &&
+        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.2.0 loaded") != nullptr &&
                                             strstr(t, "Set Up Camp anywhere") != nullptr);
         FILE* f = fopen("FastTravelAnywhere.ini", "rb");
         char ini[4096] = { 0 };
         if (f) { fread(ini, 1, sizeof ini - 1, f); fclose(f); }
         Check("writes the default settings file", strstr(ini, "PromptControl=INPUT_CONTEXT_A") != nullptr &&
                                                    strstr(ini, "RequireHorseNearby=1") != nullptr &&
-                                                   strstr(ini, "SetUpCampAnywhere=1") != nullptr);
+                                                   strstr(ini, "SetUpCampAnywhere=1") != nullptr &&
+                                                   strstr(ini, "WaypointTravel=1") != nullptr &&
+                                                   strstr(ini, "AdvanceClock=1") != nullptr);
     }
 
     // The first kneels, in a French game whose CAMP text loads slowly: the
@@ -1198,6 +1241,239 @@ int main()
     FakeSet(S_ONLINE, 0);
     StandUp();
 
+    Section("Waypoint travel");
+    {
+        // A waypoint 5 km away, a road 100 m from it: straight there.
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_CLOCK, 9 * 60);
+        Kneel();
+        Check("a waypoint on the map: Fast Travel available", FakeGet(Q_FT_PROMPTS) == 1 && FakeGet(Q_P_ENABLED) == 1 &&
+                                                              LogHas("available (to your waypoint, 5000 m away)"));
+        Check("...the log notes the waypoint at kneel time", LogHas("waypoint: 5000 m away (GPS route found, 6500 m)"));
+        int dones = LogCount("Waypoint travel: done.");
+        Press(SPACE);
+        Check("pressing it: no fast travel menu, the game's fast travel left alone",
+              FakeGet(Q_MENU_OPENS) == 0 && G(GL_FT_FLAGS) == 0 && G(GL_FT_STATE) == 0 && !CampBit());
+        Check("...Arthur stands up and the screen fades out", FakeGet(Q_KNEEL_EXITS) == 1 && FakeGet(Q_FADE) == 1 &&
+                                                               LogHas("travelling to your waypoint, 5000 m away (to the road 100 m"));
+        Frames(2);
+        Check("...controls held meanwhile, except pause", FakeGet(Q_DISABLED_ALL) == 1 && FakeGet(Q_PAUSE_ENABLED) == 2);
+        RunUntil([] { return FakeGet(Q_FADE) == 2; }, 60);
+        Frames(3);
+        Check("screen black: held at the place, frozen and unhurtable, while it loads",
+              FakeGet(Q_PLAYER_X) == 3000 && FakeGet(Q_PLAYER_Y) == 3900 && FakeGet(Q_FROZEN) >= 2 &&
+              FakeGet(Q_INVINCIBLE) >= 2 && FakeGet(Q_SCENE_ACTIVE) == 1);
+        Check("...the road asked for at the player's height, then again at the road's own",
+              FakeGet(Q_GPS_ASKS) == 2 && FakeGet(Q_GPS_ASK_Z0) == 0 && FakeGet(Q_GPS_ASK_Z1) == 150);
+        bool done = RunUntil([dones] { return LogCount("Waypoint travel: done.") > dones; }, 400);
+        Check("then there: on the ground at the road (a safe spot next to it), screen back",
+              done && FakeGet(Q_PLAYER_X) == 3003 && FakeGet(Q_PLAYER_Y) == 3900 && FakeGet(Q_PLAYER_Z) == 150 &&
+              FakeGet(Q_FADE) == 0);
+        Check("...in the saddle of his horse, which came along", FakeGet(Q_MOUNTED) == 100 && FakeGet(Q_MOUNTS) == 1 &&
+                                                                 FakeGet(Q_H100_X) == 3003 && FakeGet(Q_H100_Y) == 3900);
+        Check("...as the game's own trips do it (the horse not targettable, the camera reset)",
+              FakeGet(Q_HORSE_UNTARGETTABLE) == 1 && FakeGet(Q_CAM_HEADINGS) >= 1);
+        Check("...nothing left frozen or unhurtable, the area's loading stopped",
+              FakeGet(Q_FROZEN) == 0 && FakeGet(Q_INVINCIBLE) == 0 && FakeGet(Q_SCENE_ACTIVE) == 0);
+        Check("...the clock moved on by the ride: 6.5 km at a gallop, 6:01 (09:00 -> 15:01)",
+              FakeGet(Q_CLOCK_ADDED) == 361 && FakeGet(Q_CLOCK) == 15 * 60 + 1 && LogHas("the clock moved on 6:01"));
+        Check("...facing the waypoint (the horse turned toward it: 2 degrees)", FakeGet(Q_H100_HEADING) == 2);
+        Check("...a safe spot asked for as the game asks (not indoors, not in water)", FakeGet(Q_BAD_SAFE_FLAGS) == 0);
+        StandUp();
+
+        // Without a waypoint, or one right here, or turned off: the menu.
+        ResetWorld();
+        Kneel();
+        Press(SPACE);
+        Frames(3);
+        Check("no waypoint: the game's fast travel menu, as before", FakeGet(Q_MENU_OPEN) == 1 &&
+                                                                     LogHas("the game's fast travel menu: no waypoint set"));
+        FakeSet(S_MENU, 1);
+        Frames(3);
+        StandUp();
+        ResetWorld();
+        FakeSet(S_WP_ACTIVE, 1);
+        FakeSet(S_WP_X, 30);
+        FakeSet(S_WP_Y, 0);
+        Kneel();
+        Press(SPACE);
+        Frames(3);
+        Check("a waypoint 30 m away (reached): the menu", FakeGet(Q_MENU_OPEN) == 1 &&
+                                                          LogHas("your waypoint is right here"));
+        FakeSet(S_MENU, 1);
+        Frames(3);
+        StandUp();
+        ResetWorld();
+        WriteIni("WaypointTravel=0\r\n");
+        SetWaypoint();
+        Kneel();
+        Press(SPACE);
+        Frames(3);
+        Check("WaypointTravel=0: the menu even with a waypoint", FakeGet(Q_MENU_OPEN) == 1 && FakeGet(Q_FADE) == 0);
+        FakeSet(S_MENU, 1);
+        Frames(3);
+        StandUp();
+        WriteIni("");
+
+        // The same rules as the menu, but not the menu's own.
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_WANTED, 1);
+        Kneel();
+        Press(SPACE);
+        Frames(2);
+        Check("wanted, with a waypoint: greyed out, says why", FakeGet(Q_P_ENABLED) == 0 && HelpHas("wanted") &&
+                                                               FakeGet(Q_FADE) == 0);
+        StandUp();
+        FakeSet(S_WANTED, 0);
+        ResetWorld();
+        SetWaypoint();
+        FakeHorse(100, 0, 1, 0, 1000, 0, 2, 150);   // the horse 1 km away
+        Kneel();
+        Press(SPACE);
+        Frames(2);
+        Check("horse too far, with a waypoint: greyed out (FAR_HORSE_FT)", FakeGet(Q_P_ENABLED) == 0 &&
+                                                                         HelpIs("FAR_HORSE_FT"));
+        StandUp();
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_CANLAUNCH, 0);                     // the menu app can't launch
+        FakeSet(S_NO_SCENARIO_TASK, 1);              // nor would the menu stay open
+        Kneel();
+        Check("the menu's own conditions don't hold up a trip to the waypoint", FakeGet(Q_P_ENABLED) == 1);
+        StandUp();
+        FakeSet(S_CANLAUNCH, 1);
+        FakeSet(S_NO_SCENARIO_TASK, 0);
+
+        // On foot, a second horse, the clock.
+        ResetWorld();
+        WriteIni("RequireHorseNearby=0\r\n");
+        SetWaypoint();
+        FakeHorse(100, 0, 1, 0, 1000, 0, 2, 150);   // far away
+        Kneel();
+        Press(SPACE);
+        Check("RequireHorseNearby=0, the horse far: on foot, the clock at a walk (6.5 km: 13:33)",
+              TripDone(400) && FakeGet(Q_MOUNTED) == 0 && FakeGet(Q_H100_X) == 1000 && FakeGet(Q_CLOCK_ADDED) == 813 &&
+              FakeGet(Q_PLAYER_X) == 3003);
+        StandUp();
+        WriteIni("");
+        ResetWorld();
+        SetWaypoint();
+        FakeHorse(101, 1, 1, 0, 20, 0, 2, 150);     // a second horse close by
+        Kneel();
+        Press(SPACE);
+        Check("a second horse in whistling range: it comes along too", TripDone(400) && FakeGet(Q_MOUNTED) == 100 &&
+              FakeGet(Q_H101_X) == 3005 && FakeGet(Q_H101_Y) == 3898);
+        StandUp();
+        ResetWorld();
+        WriteIni("AdvanceClock=0\r\n");
+        SetWaypoint();
+        Kneel();
+        Press(SPACE);
+        Check("AdvanceClock=0: the same time of day on arrival", TripDone(400) && FakeGet(Q_CLOCK_ADDED) == 0 &&
+                                                                 FakeGet(Q_MOUNTED) == 100);
+        StandUp();
+        WriteIni("");
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_HORSE_UNMOUNTABLE, 1);
+        Kneel();
+        Press(SPACE);
+        {
+            bool ok = TripDone(400) && FakeGet(Q_MOUNTED) == 0 && FakeGet(Q_H100_X) == 3003 &&
+                      (FakeGet(Q_PLAYER_X) == 3004 || FakeGet(Q_PLAYER_X) == 3005) &&   // 1.5 m beside it
+                      LogHas("the horse can't be mounted right now");
+            char d[80];
+            snprintf(d, sizeof d, "(player at %d, %d; horse at %d)", FakeGet(Q_PLAYER_X), FakeGet(Q_PLAYER_Y), FakeGet(Q_H100_X));
+            Check("a horse that can't be mounted right now: next to him, on foot", ok, d);
+        }
+        StandUp();
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_HORSE_HITCHED, 1);                 // at a hitching post
+        Kneel();
+        Press(SPACE);
+        Check("a horse at a hitching post: unhitched first, then along", TripDone(400) && FakeGet(Q_H100_UNHITCHES) == 1 &&
+              FakeGet(Q_MOUNTED) == 100);
+        StandUp();
+
+        // No road near the waypoint: its own ground.
+        ResetWorld();
+        SetWaypoint(false);
+        FakeSet(S_DEST_GROUND, 420);                 // high up
+        Kneel();
+        Press(SPACE);
+        Check("no GPS route near the waypoint: to the waypoint itself, its ground found (420 m up)",
+              TripDone(900) && FakeGet(Q_PLAYER_X) == 3003 && FakeGet(Q_PLAYER_Y) == 4000 && FakeGet(Q_PLAYER_Z) == 420 &&
+              LogHas("the ground at the waypoint is at 420.0") && FakeGet(Q_MOUNTED) == 100);
+        StandUp();
+        ResetWorld();
+        SetWaypoint(false);
+        FakeSet(S_NO_GROUND, 1);                     // nothing to stand on there
+        Kneel();
+        Press(SPACE);
+        Check("no ground at all there: back where the trip began, says so, the clock untouched",
+              TripDone(1500) && FakeGet(Q_PLAYER_X) < 50 && FakeGet(Q_PLAYER_Y) < 50 && FakeGet(Q_CLOCK_ADDED) == 0 &&
+              HelpHas("Couldn't find solid ground") && LogHas("going back to where the trip began"));
+        StandUp();
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_COLL_NEVER, 1);                    // the place never streams in
+        Kneel();
+        Press(SPACE);
+        Check("the place never loads: after 15 s, back where the trip began", TripDone(1200) &&
+              FakeGet(Q_PLAYER_X) < 50 && LogHas("didn't load within 15 s"));
+        StandUp();
+        ResetWorld();
+        SetWaypoint();
+        FakeSet(S_SCENE_NEVER, 1);                   // the load scene never says it's done, the ground is in
+        Kneel();
+        Press(SPACE);
+        Check("the area still loading after 8 s, its ground in: goes ahead", TripDone(600) &&
+              FakeGet(Q_PLAYER_X) == 3003 && LogHas("still loading after 8 s"));
+        StandUp();
+
+        // Trouble along the way.
+        ResetWorld();
+        SetWaypoint();
+        Kneel();
+        Press(SPACE);
+        RunUntil([] { return FakeGet(Q_FADE) == 2; }, 60);
+        Frames(3);
+        FakeSet(S_PLAYERDEAD, 1);
+        Frames(3);
+        Check("the player dies on the way: let go of, nothing left frozen", FakeGet(Q_FROZEN) == 0 &&
+              FakeGet(Q_SCENE_ACTIVE) == 0 && LogHas("Waypoint travel: stopped (the player died)"));
+        FakeSet(S_PLAYERDEAD, 0);
+        Frames(40);
+        StandUp();
+        ResetWorld();
+        SetWaypoint();
+        Kneel();
+        Press(SPACE);
+        RunUntil([] { return FakeGet(Q_FADE) == 2; }, 60);
+        Frames(3);
+        FakeSet(S_ONLINE, 1);
+        Frames(3);
+        FakeSet(S_ONLINE, 0);
+        Frames(3);
+        Check("an online session on the way: let go of, nothing left frozen", FakeGet(Q_FROZEN) == 0 &&
+                                                                             FakeGet(Q_SCENE_ACTIVE) == 0);
+        FakeSet(S_SIMFADEIN, 0);
+        Frames(30);
+        StandUp();
+        ResetWorld();
+        SetWaypoint();
+        Kneel();
+        Press(SPACE);
+        TripDone(400);
+        Kneel();
+        Check("kneeling again after a trip: Fast Travel there as usual", FakeGet(Q_FT_PROMPTS) == 1);
+        StandUp();
+        ResetWorld();
+    }
+
     Section("Set Up Camp anywhere");
     {
         const uint32_t E = Joaat("INPUT_CONTEXT_Y");
@@ -1648,6 +1924,7 @@ int main()
         Check("player_camp only ever asked for, started and let go of by name, with its 10 arguments",
               FakeGet(Q_BAD_SCRIPT_CALLS) == 0);
         Check("the camp kit looked for in the right inventory", FakeGet(Q_BAD_INVENTORY) == 0);
+        Check("safe spots always asked for as the game asks (12: not indoors, not in water)", FakeGet(Q_BAD_SAFE_FLAGS) == 0);
         snprintf(d, sizeof d, "(%d frames, text pulled from under it %d times)", FakeGet(Q_BLANK_TOTAL), g_textPulls);
         Check("over the whole run, Fast Travel never sat in the kneel menu without text "
               "(but for a frame each time the tests pulled the text from under it)", FakeGet(Q_BLANK_TOTAL) <= g_textPulls, d);
