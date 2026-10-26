@@ -2,26 +2,54 @@
 
 A [Script Hook RDR2](http://www.dev-c.com/rdr2/scripthookrdr2/) plugin for **Red Dead Redemption 2 on PC (Story Mode)**.
 
-Hold **E** to kneel anywhere, and the kneel menu in the bottom-right corner (Craft, Set Up Camp, Leave) gets a **Fast Travel** button on **Space** (A on a controller), the same button a campfire has. It opens the game's own fast travel menu: the same list of places, the same trip with your horse, the same rules as at a campfire.
+Hold **E** to kneel anywhere, and the kneel menu in the bottom-right corner (Craft, Set Up Camp, Leave) gets a **Fast Travel** button on **Space** (A on a controller), the same button a campfire has.
+
+- **With a waypoint on your map**, it takes you straight there: the screen fades out, and a few seconds later you're at your waypoint (on the road nearest it) in the saddle, with the clock moved on by the time the ride would have taken.
+- **Without one**, it opens the game's own fast travel menu: the same list of places, the same trip with your horse, the same rules as at a campfire.
 
 And **Set Up Camp** (E) is there wherever you kneel, towns included. Where the game leaves it out of the kneel menu, the mod puts it in, and the game makes camp at the nearest of its own campsites: from a town, just outside it.
 
 ## Download
 
-Download [`release/FastTravelAnywhere-1.1.0.zip`](release/FastTravelAnywhere-1.1.0.zip) (on that page, use the download button). It contains `FastTravelAnywhere.asi`, `FastTravelAnywhere.ini`, a README and the full source.
+Download [`release/FastTravelAnywhere-1.2.0.zip`](release/FastTravelAnywhere-1.2.0.zip) (on that page, use the download button). It contains `FastTravelAnywhere.asi`, `FastTravelAnywhere.ini`, a README and the full source.
 
 ## Install
 
 1. Install the latest [Script Hook RDR2](http://www.dev-c.com/rdr2/scripthookrdr2/). Its `ScriptHookRDR2.dll` and `dinput8.dll` go in your game folder (the one with `RDR2.exe`). On Steam: *Library → right-click Red Dead Redemption 2 → Manage → Browse local files*.
 2. Copy `FastTravelAnywhere.asi` and `FastTravelAnywhere.ini` into the same folder.
 3. Load Story Mode. A yellow message appears in the top-left corner for a few seconds:
-   `Fast Travel Anywhere 1.1.0 loaded - hold E to kneel: Space to Fast Travel, E to Set Up Camp anywhere`
+   `Fast Travel Anywhere 1.2.0 loaded - hold E to kneel: Space to Fast Travel, E to Set Up Camp anywhere`
 
 To uninstall, delete `FastTravelAnywhere.asi`, `FastTravelAnywhere.ini` and `FastTravelAnywhere.log`.
 
 ## Using it
 
-1. Hold **E** with nothing around you to kneel. The kneel menu appears in the bottom-right corner, now with **Fast Travel** on Space.
+### To your waypoint
+
+1. Set a waypoint on the map, as you would to ride somewhere.
+2. Hold **E** with nothing around you to kneel. The kneel menu appears in the bottom-right corner, now with **Fast Travel** on Space.
+3. Press **Space**. Arthur stands up, the screen fades out, and a few seconds later (while the place loads) you're there, in the saddle, facing the waypoint.
+
+Where you arrive:
+
+- **A waypoint near a road:** on the road nearest it, where the GPS line on your map comes closest to it.
+- **Off the roads:** at the waypoint itself, on the ground there.
+- **Out in a lake or a river:** on the nearest shore, or else on the road nearest the waypoint.
+- **Somewhere with no ground to stand on** (the game finds none as the place loads): back where you started, with a message saying so. Try a waypoint on or near a road.
+
+Your horse comes along when it's within whistling range (and your second horse, if it's near you too); otherwise you go on foot. The clock moves on by the time the ride would have taken: the length of the GPS route at a steady gallop (a game minute for every 18 m), or at a walk on foot (8 m), so a ride across the map takes a few game hours. `AdvanceClock=0` keeps the time of day.
+
+The fast travel rules apply (see [The rules](#the-rules)): fast travel unlocked, your horse within whistling range, not wanted, not on a mission. Space opens the menu instead when:
+
+- the waypoint is closer than 60 m, or you're already at the road nearest it after a trip there;
+- you're Arthur and the waypoint is somewhere the game keeps him out: **New Austin**, where the game's sniper shoots him, or **Blackwater**, which the game's fast travel leaves out for him (a message says so);
+- `WaypointTravel=0`.
+
+### To a place in the menu
+
+With no waypoint set:
+
+1. Kneel as above.
 2. Press **Space**. The game's fast travel menu opens, the same one as at a campfire. You can press it as soon as it appears: if Arthur is still getting down, the menu opens the moment he's down.
 3. Pick a place. Arthur stands up, the screen fades out, and you arrive at the place on your horse. Back out of the menu to stay.
 
@@ -43,7 +71,7 @@ Fast Travel follows the game's own rules for fast travel at a campfire:
 | Not during a mission | "You can't fast travel during a mission." |
 | You have to have discovered somewhere to go | the game's own *"Discover more regions to use fast travel. Regions in lockdown are unavailable."* |
 
-Which places are listed (and which are off-limits, such as New Austin for Arthur) is decided by the game itself, as at a campfire. When the button can't be used it's shown greyed out, and pressing it says why. The unlock, horse, wanted and mission rules can each be relaxed in the `.ini`.
+Which places are listed (and which are off-limits, such as New Austin for Arthur) is decided by the game itself, as at a campfire. A trip to your waypoint keeps to the same: as Arthur, a waypoint in New Austin or Blackwater opens the menu instead. When the button can't be used it's shown greyed out, and pressing it says why. The unlock, horse, wanted and mission rules can each be relaxed in the `.ini`.
 
 Set Up Camp keeps all of the game's camping rules except the ones about the place: you need a camp kit (one the game hasn't disabled for the moment), and it isn't added while you're wanted or have just committed a crime, in combat, on a mission (unless the mission lets you camp), indoors, in a gang hideout, at the gang's camp, in Guarma, in an area under lockdown, on a vehicle, boat or train, during a random encounter, an ambush or a minigame, while busy with your horse, or with a camp already up. If the game finds no campsite to use, it says so itself (*"Cannot create camp in this location."*).
 
@@ -54,9 +82,11 @@ Changes take effect within a couple of seconds, no restart needed.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `Enabled` | `1` | Fast Travel in the kneel menu on/off. |
+| `WaypointTravel` | `1` | With a waypoint on your map, Fast Travel takes you straight there (to the road nearest it, with your horse). `0` = always the game's fast travel menu. |
+| `AdvanceClock` | `1` | On a trip to your waypoint, the clock moves on by the time the ride would have taken. `0` = you arrive at the same time of day. |
 | `SetUpCampAnywhere` | `1` | Set Up Camp in the kneel menu wherever you kneel. `0` = only where the game offers it itself. |
 | `RequireUnlock` | `1` | Fast travel has to be unlocked, as for your camp. |
-| `RequireHorseNearby` | `1` | Your horse has to be within whistling range. `0` = also when it's too far away; you arrive on foot. A living horse is always needed: the game's menu closes without one. |
+| `RequireHorseNearby` | `1` | Your horse has to be within whistling range. `0` = also when it's too far away; you arrive on foot. The game's menu always needs a living horse (it closes without one); a trip to your waypoint doesn't. |
 | `AllowWhenWanted` | `0` | `1` = allow fast travel while wanted. |
 | `AllowOnMissions` | `0` | `1` = allow fast travel during a mission. |
 | `ShowWhenUnavailable` | `1` | Show the button greyed out when it can't be used (pressing it says why). `0` = hide it, as a campfire does. |
@@ -78,6 +108,15 @@ Everything here comes from the game's decompiled scripts (build 1491.50).
 - **When you pick a place**, `short_update` sets bit 8 and waits for the camp to pack up: the camp plays its kick-the-fire animation, the screen fades out, and it sets bit 32. Then `short_update` takes your horse along if it's within whistling range, loads the place and puts you on your horse.
 
 So the plugin does what a campfire does: on the button it sets bit 23 and bit 4; when you pick a place it starts the fast travel music (bit 1), has Arthur stand up, fades the screen out, clears his tasks and sets bit 32; the game does the trip. It puts bit 23 back the way it was afterwards, and it checks the same things a campfire checks before it offers fast travel (`player_camp` `func_105` and `func_306`), with the game's own messages where the game has them (`property_use_core` `func_198`).
+
+**To your waypoint:**
+
+- The game has no trip to a waypoint of its own: none of its scripts even reads where the waypoint is. So the plugin makes the trip the way the game's own trips are made (`short_update`'s trip to a spot, its `func_1610`, and `train_fast_travel_core`), with the natives those use.
+- **Where to:** when the GPS route runs on roads (`_IS_PATH_FOR_GPS_ON_ROAD`, which `short_update` checks before it trusts a route point), `_FIND_CLOSEST_GPS_POSITION` gives the point of the route closest to the waypoint, with its height; it's asked again at that height, so a lower road elsewhere on the route doesn't come out closer. If that point is more than 300 m from the waypoint, or there's no such route, the waypoint itself, whose height (the map's waypoint has none) is found as the place loads.
+- **Not where the game keeps Arthur out:** `medium_update` has a sniper shoot him in New Austin's four districts (its `func_97`, unless `Global_1934266.f_56` turns the sniper off), and `short_update`'s fast travel menu leaves Blackwater out for him (`func_1576`). The waypoint and the road nearest it are looked up in the map's zones (`_GET_MAP_ZONE_AT_COORDS`, at a few heights, the waypoint having none); a road point in such a place isn't used.
+- **Going:** Arthur stands up (the kneel menu's own Leave), the screen fades out, and the horses that come along are picked as `short_update` picks them: the active horse if it's within whistling range, else the slot-1 horse if it is, and the slot-1 horse as well if both are; a horse at a hitching post is unhitched first (`func_1618`). The player and the horses are held, frozen and unable to take damage (only those that could, and put back as they were), at the place while it streams in (`LOAD_SCENE_START_SPHERE` and `SET_ENTITY_COORDS` as the train's trip uses them, `REQUEST_COLLISION_AT_COORD`): until it's loaded and its navmesh is in, or 8 and 10 seconds once its ground is in. For the waypoint itself it tries heights (100 m, 150 m, 50 m, 0, then up to 1000 m), round again for up to 20 seconds, until `GET_GROUND_Z_FOR_3D_COORD` finds the ground; held above any water there.
+- **Arriving:** the ground checked again where the route said it would be (and looked for the same way if it isn't there); out of deep water (`TEST_VERTICAL_PROBE_AGAINST_ALL_WATER`, more than a metre over the ground) to the nearest dry spot within 150 m, else to the road nearest the waypoint; a spot a person can stand on next to it (`GET_SAFE_COORD_FOR_PED` with the game's usual flags: not indoors, not in water), the horse put down there facing the waypoint and the player put in its saddle (`func_1610`: `SET_PED_ONTO_MOUNT`, the horse made untargettable as `func_2856` does), a second horse behind on the right (`func_518`), the camera behind you, the clock moved on (`ADD_TO_CLOCK_TIME`), and the screen faded back in. The player can't take damage until he's down (not falling), 6 seconds at most.
+- **If it goes wrong:** a place that doesn't load within 15 seconds, has no ground, or is deep water with nowhere dry near, sends you back to where the trip began (loaded the same way), with a message. If the player dies on the way, he's let go of and the game's death screen takes over. A save loaded or an online session started on the way takes the trip with it. The pause menu stops the trip's clocks.
 
 **Set Up Camp:**
 
@@ -102,6 +141,8 @@ The plugin binds to `ScriptHookRDR2.dll` at runtime by its exported names (inclu
 
 ## Troubleshooting
 
+- **Space opens the menu although a waypoint is set:** the log's `Fast Travel: available (...)` line says why: `no waypoint set`, `your waypoint is right here` (closer than 60 m), `you're at the road nearest your waypoint` (after a trip there), `your waypoint is in New Austin` or `in Blackwater` (as Arthur), or `WaypointTravel=0`.
+- **A trip to your waypoint went wrong:** the log follows each step: `Fast Travel pressed: travelling to your waypoint, ... m away (to the road ... m from it; ...)`, `screen black; the horse comes along`, `the ground at the waypoint is at ...` (off the roads), `the waypoint is in deep water ...` (in a lake), `arrived at x, y, z, ... m from the waypoint; on the horse`, `the clock moved on ...` and `done`. Please include those lines if you report a problem.
 - **No message when Story Mode loads:** check `ScriptHookRDR2.log` in the game folder (update Script Hook if it says your game version isn't supported), then `FastTravelAnywhere.log`.
 - **No Fast Travel in the kneel menu:** `FastTravelAnywhere.log` gets a `Kneel menu up.` line each time you kneel, with the game's fast travel state, the unlock check and your horse, then a `Fast Travel added to the kneel menu (...)` line that says which text it shows. No such lines mean the plugin didn't see the kneel menu.
 - **Fast Travel is greyed out:** press it to see why; the log has a `Fast Travel: ...` line with the reason too.
@@ -129,7 +170,7 @@ build_msvc.bat
 
 ## Tests
 
-`tests/run_tests.sh` builds a fake `ScriptHookRDR2.dll` and a test host, then runs the real `.asi` under Wine. The fake exports the same names as Script Hook, simulates the natives and script globals the plugin uses, and runs a model of the game scripts it works with, written from their decompiled code: the kneel (`dynamic_craft_scenario`: its states and its HUD bit, its menu coming up while Arthur is still getting down, its own prompts in the shared prompt list with Set Up Camp only where the game allows a camp, its Set Up Camp, and its stand-up when you move), `short_update`'s fast travel module (the requests, the menu, all of its checks, the horse it takes along and the trip) and `player_camp` (launched by name with its arguments: it gets Arthur up, then pitches the camp or gives up). It also models the game's `CAMP` text block: loaded a few frames after a request, unloaded by the camp scripts and the Craft menu when they end, gone after a trip (as players found in the game), and a prompt whose label isn't loaded shows no text. The 276 checks cover:
+`tests/run_tests.sh` builds a fake `ScriptHookRDR2.dll` and a test host, then runs the real `.asi` under Wine. The fake exports the same names as Script Hook, simulates the natives and script globals the plugin uses, and runs a model of the game scripts it works with, written from their decompiled code: the kneel (`dynamic_craft_scenario`: its states and its HUD bit, its menu coming up while Arthur is still getting down, its own prompts in the shared prompt list with Set Up Camp only where the game allows a camp, its Set Up Camp, and its stand-up when you move), `short_update`'s fast travel module (the requests, the menu, all of its checks, the horse it takes along and the trip) and `player_camp` (launched by name with its arguments: it gets Arthur up, then pitches the camp or gives up). It also models the game's `CAMP` text block: loaded a few frames after a request, unloaded by the camp scripts and the Craft menu when they end, gone after a trip (as players found in the game), and a prompt whose label isn't loaded shows no text. For trips to a waypoint it models the waypoint and its GPS route (on roads or not), the world streaming in around a place (its collision loading over a few frames, a load scene, the navmesh, the ground found only once its collision is in and only from above it, or later still), safe spots, a lake with its shore, the map's zones (New Austin and Blackwater, answering only above some height), Arthur or John, and placing, freezing, mounting, the damage flag and the clock. The 336 checks cover:
 
 - The prompt: only while the kneel menu is up, in its group, with the game's text label, button, mode and priority; gone with an interaction target, the camera out, or standing up; Jump held off while kneeling.
 - Its timing: up in the same frame as the kneel menu's own buttons, before Arthur is all the way down, and gone with them (Set Up Camp, a campfire's own prompts); 1.0.0's timing when the kneel menu's bit never shows; a press before he's down waits and the menu opens (and stays open) once he is, in the scenario's base or active in it; dropped if he gets back up, presses Set Up Camp, or isn't down 3 seconds later; a press while the `CAMP` text is coming back in waits for it.
@@ -141,13 +182,15 @@ build_msvc.bat
 - Settings reloaded on the next kneel, `Enabled=0` and back, `PromptText`, `PromptControl` (and an unknown one).
 - Movement under the menu (the kneel ends, the menu closes, the log and a tip say why) and `LockMovementInMenu=1`.
 - Trouble: a menu that never shows, the player dying right after pressing, with the menu open or during the fade, a trip that never starts (reset like the game's own finish), the trip started early by a camp elsewhere, a trip still loading after 2 minutes, a leftover close request, Red Dead Online, globals that don't match the game build (nothing written), and a game that never answers (request withdrawn, turned off).
+- A trip to your waypoint: the button available with a waypoint set, and the menu instead with none, one right here, `WaypointTravel=0`, or right after a trip to the road nearest it; Arthur up, the fade, controls held; held frozen and unhurtable at the road nearest the waypoint while it loads (the GPS route asked at the player's height, then at the road's; the place loaded and the player moved as the game's own trips do); arriving at a safe spot there (asked for with the game's flags) in the saddle of his horse, facing the waypoint, the camera behind him, nothing left frozen or unhurtable and the loading stopped; the clock moved on by the ride (at a gallop, at a walk on foot, not at all with `AdvanceClock=0`, by the straight line when the route's length doesn't fit); Arthur and New Austin (the menu and a message; also when the map's zones only answer higher up; John goes; so does Arthur with the game's sniper off) and Blackwater (the menu; a road point inside it, the waypoint outside: to the waypoint itself); the rules (wanted, the horse too far) but not the menu's own; on foot with `RequireHorseNearby=0`, also with no horse at all; a second horse; a horse that can't be mounted, or at a hitching post; a player and horse unhurtable already (left so), still falling as the screen comes back (unhurtable until he's down); no road near the waypoint, a route not on roads, or a route point at the wrong height (the ground found from above); the ground slow to come in (the heights tried again); no ground at all, or a place that never loads (back where it began, with a message), or loads slowly, or its navmesh late or missing (ahead once its ground is in); another script's load scene (left running); a waypoint in a lake (to its shore, held above the water meanwhile), a big lake (to the road nearest the waypoint), with neither (back); dying on the way (let go of, the screen left to the death screen), the pause menu (the trip's clocks stopped), a save loaded and Red Dead Online mid-trip (the trip dropped); kneeling again afterwards.
 - Set Up Camp: none added where the kneel menu has its own (and E there is the game's); added in a town with the game's label, button, mode and priority, together with the kneel menu's buttons; a press starts `player_camp` with the button's arguments, stack size and a full or small camp (horse near, far, marked away, or a led horse), holds and hides the kneel menu's other buttons, Arthur up, the camp pitched, none offered while it's up; pressed before Arthur is down, after a Fast Travel press; the camp kit (the simple one, the backup inventory, a kit a script has disabled, the game's own camp); each of the game's other camping rules, one by one, including vehicles, boats and trains and the law's dispatch check, and the exceptions (a mission that lets you camp, a script's block lifted, a ragdoll on a wagon, a stranger mission's spot far away); the kneel menu's buttons not found (none added) or found a moment later, rebuilt with their own Set Up Camp, taken down; another script's prompt on E in the list ignored; `player_camp` finding no campsite, not loading (the buttons back), missing, or still loading when the player dies or an online session starts (not started); the pause menu (taken away meanwhile); `SetUpCampAnywhere=0` and back while kneeling; `Enabled=0` (Set Up Camp alone); over the whole run, never two Set Up Camps.
 - Every native called with the right number of arguments, and no unknown natives.
 
-v1.1.0 passes all 276 checks.
+v1.2.0 passes all 336 checks. It hasn't been tried in the game yet: the fake can't tell how the real game streams a place in or finds its ground, so the log records each step of a trip.
 
 ## Changes
 
+- **1.2.0**: Fast travel to your waypoint. With a waypoint on your map, Fast Travel in the kneel menu takes you straight there, to the road nearest it, on your horse, with the clock moved on by the ride's length. Without a waypoint it opens the game's fast travel menu as before. New settings `WaypointTravel` and `AdvanceClock` (both on by default).
 - **1.1.0**: Set Up Camp anywhere. Where the game leaves Set Up Camp out of the kneel menu (in a town, say), the mod adds it on E, and the game makes camp at the nearest of its campsites, outside town. Its other camping rules still apply. New setting `SetUpCampAnywhere` (on by default). Settings changes now apply within a couple of seconds, without kneeling again.
 - **1.0.1**: Fast Travel always shows its name. In 1.0.0 it could be missing from the kneel menu (after a trip, for example) while Space still worked, because its text lives in the game's `CAMP` text block, which only the camp scripts load; the plugin now loads it itself. Fast Travel also comes up together with the kneel menu's own buttons instead of up to a second later (a press before Arthur is all the way down opens the menu once he is), and goes away with them (after Set Up Camp, for example). Greyed out while the journal or satchel is open, which would close the game's menu.
 - **1.0.0**: First release.
