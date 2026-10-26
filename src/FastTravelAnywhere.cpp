@@ -190,7 +190,7 @@ static const char kDefaultIni[] =
     "; 1 = Set Up Camp in the kneel menu wherever you kneel, towns included. Where the game\r\n"
     "; leaves it out, the mod adds it, and the game makes camp at the nearest of its campsites\r\n"
     "; (from a town, just outside it). Its other rules stay: not while wanted, in combat,\r\n"
-    "; on a mission, indoors, in a gang hideout or with a camp already up. 0 = off.\r\n"
+    "; on a mission, indoors, on a train, in a gang hideout or with a camp already up. 0 = off.\r\n"
     "SetUpCampAnywhere=1\r\n"
     "\r\n"
     "; The game's own rules for fast travel at a campfire (1 = follow them):\r\n"
@@ -541,6 +541,15 @@ namespace N
     static inline bool RecentCrime(int player)       { return Invoke<int>(0x26934083D3F2579CULL, player) != 0; } // LAW::_0x26934083D3F2579C ("recently committed a crime")
     static inline bool IsMinigameInProgress()        { return Invoke<int>(0xF4D8BCD052E7EA1BULL) != 0; }        // MISC::IS_MINIGAME_IN_PROGRESS
     static inline bool IsAnimalInteractionRunning(int p) { return Invoke<int>(0x7FC84E85D98F063DULL, p) != 0; } // PED::_IS_ANIMAL_INTERACTION_RUNNING
+    static inline bool IsPedOnVehicle(int p)         { return Invoke<int>(0x67722AEB798E5FABULL, p, 0) != 0; }  // PED::IS_PED_ON_VEHICLE
+    static inline bool IsPedRagdoll(int p)           { return Invoke<int>(0x47E4E977581C5B55ULL, p) != 0; }     // PED::IS_PED_RAGDOLL
+    static inline bool IsPedInAnyBoat(int p)         { return Invoke<int>(0x2E0E1C2B4F6CB339ULL, p) != 0; }     // PED::IS_PED_IN_ANY_BOAT
+    static inline bool IsPlayerRidingTrain(int pl)   { return Invoke<int>(0x2FB0ACADA6A238DDULL, pl) != 0; }    // PLAYER::IS_PLAYER_RIDING_TRAIN
+    static inline bool IsPedJacking(int p)           { return Invoke<int>(0x4AE4FF911DFB61DAULL, p) != 0; }     // PED::IS_PED_JACKING
+    // Named _INVENTORY_IS_INVENTORY_ITEM_EQUIPPED in the native DB, but it reads whether a script
+    // has the item disabled (alternative name _INVENTORY_IS_ITEM_DISABLED; see rcm_collect_dinosaur_bones11).
+    static inline bool ItemDisabled(int inv, uint32_t item, int p2)
+    { return Invoke<int>(0x3D10D7179D7034AFULL, inv, item, p2) != 0; }                                          // INVENTORY::_INVENTORY_IS_INVENTORY_ITEM_EQUIPPED
 
     // The kneel. dynamic_craft_scenario shows its prompts once the kneel's
     // animation event fires or IS_PED_ACTIVE_IN_SCENARIO(player, 0), while the
@@ -691,6 +700,10 @@ namespace G
     static const int kCampFlow120 = 1353598;  // Global_1347702[120 /*49*/].f_15: a flow whose mission has its own camp spot
     static const int kCampFlow15  = 1836123;  // Global_1835011[15 /*74*/].f_1: likewise
     static const int kItemUseOff  = 1935697;  // Global_1935689.f_8: item use held (bait being laid): the button uses no kit then
+    static const int kCampForced  = 1392042;  // Global_1392040.f_2: a camp the game sets up itself: a disabled kit still works
+    static const int kInvFlagA    = 1931689;  // Global_1914319.f_17370 \ the third argument the game passes when it
+    static const int kInvFlagB    = 1933316;  // Global_1914319.f_18996.f_1 / asks whether the kit is disabled (func_168(0))
+    static const int kEvelynSpot  = 1351353;  // Global_1347702[74 /*49*/].f_24: the spot where RCM_EVELYN_MILLER4 bans camping (12 m)
 
     // Bits of kFtFlags (short_update func_80)
     static const int FT_MUSIC  = 1;   // play the fast travel music
@@ -753,7 +766,7 @@ static uint32_t H_DYNAMIC_CRAFT, H_SHORT_UPDATE, H_CAMERA_ITEM, H_SIMPLE_CRAFTIN
 static uint32_t H_PLAYER_CAMP, H_INTERACTIVE_CAMPFIRE, H_PROPERTY_USE, H_CAMPFIRE_ALWAYS, H_SLEEPING;
 static uint32_t H_FAST_TRAVEL_MENU, H_PLAYER_MENU;
 static uint32_t H_INPUT_CONTEXT_X, H_INPUT_CONTEXT_Y, H_INPUT_CONTEXT_B, H_INPUT_JUMP;
-static uint32_t H_KIT_CAMP, H_KIT_CAMP_SIMPLE, H_RCM_EVELYN4;
+static uint32_t H_KIT_CAMP, H_KIT_CAMP_SIMPLE, H_RCM_EVELYN4, H_LAW_DISPATCH_PENDING;
 static uint32_t H_INPUT_MOVE_LR, H_INPUT_MOVE_UD, H_FRONTEND_PAUSE, H_FRONTEND_PAUSE_ALT, H_CTX_FRONTEND_MENU;
 static uint32_t H_KNEEL_EXIT;
 
@@ -777,6 +790,7 @@ static void InitHashes()
     H_KIT_CAMP         = Joaat("KIT_CAMP");
     H_KIT_CAMP_SIMPLE  = Joaat("KIT_CAMP_SIMPLE");
     H_RCM_EVELYN4      = Joaat("RCM_EVELYN_MILLER4");
+    H_LAW_DISPATCH_PENDING = Joaat("LAW_DISPATCH_PENDING");
     H_INPUT_JUMP       = Joaat("INPUT_JUMP");
     H_INPUT_MOVE_LR    = Joaat("INPUT_MOVE_LR");
     H_INPUT_MOVE_UD    = Joaat("INPUT_MOVE_UD");
@@ -1764,6 +1778,8 @@ enum CampReason
     C_GUARMA,
     C_LOCKDOWN,
     C_STORY_SPOT,   // a mission whose camp goes to a spot of its own
+    C_KIT_OFF,      // the game has the camp kit disabled right now
+    C_VEHICLE,      // in or on a vehicle, a boat or a train
 };
 
 static const char* CampReasonName(int r)
@@ -1790,6 +1806,8 @@ static const char* CampReasonName(int r)
     case C_GUARMA:      return "not added: in Guarma";
     case C_LOCKDOWN:    return "not added: the area is under lockdown";
     case C_STORY_SPOT:  return "not added: a mission with its own camp spot is under way";
+    case C_KIT_OFF:     return "not added: the game has the camp kit disabled right now";
+    case C_VEHICLE:     return "not added: on a vehicle, boat or train";
     }
     return "?";
 }
@@ -1896,16 +1914,32 @@ static void ScanKneelPrompts()
             g_kneelOwnCamp > 0 ? "there" : g_kneelOwnCamp == 0 ? "left out" : "not found");
 }
 
-// The camp kit the kneel menu's Set Up Camp would use (func_15: the item in
-// the player's inventory, the backup one while it's in use).
-static uint32_t CampKit()
+// The camp kit the kneel menu's Set Up Camp would use: the first of KIT_CAMP
+// and KIT_CAMP_SIMPLE in the player's inventory (the backup one while it's in
+// use; func_15), that the button doesn't refuse (func_90: a kit a script has
+// disabled is refused, unless the game is setting up a camp itself). 1 = a kit
+// to use, 0 = no kit, -1 = a kit, but disabled.
+static int CampKit()
 {
     int inv = N::UsingBackupInventory() ? 5 : 1;
-    if (N::ItemKeyValid(H_KIT_CAMP) && N::ItemCount(inv, H_KIT_CAMP) >= 1)
-        return H_KIT_CAMP;
-    if (N::ItemKeyValid(H_KIT_CAMP_SIMPLE) && N::ItemCount(inv, H_KIT_CAMP_SIMPLE) >= 1)
-        return H_KIT_CAMP_SIMPLE;
-    return 0;
+    int p2  = (G::Int(G::kInvFlagA, 0) || G::Int(G::kInvFlagB, 0)) ? 1 : 0;
+    bool owned = false;
+    const uint32_t kits[2] = { H_KIT_CAMP, H_KIT_CAMP_SIMPLE };
+    for (uint32_t kit : kits)
+    {
+        if (!N::ItemKeyValid(kit) || N::ItemCount(inv, kit) < 1)
+            continue;
+        owned = true;
+        if (!N::ItemDisabled(inv, kit, p2) || G::Int(G::kCampForced, 0) != 0)
+            return 1;
+    }
+    return owned ? -1 : 0;
+}
+
+static float Dist2(const N::Vec3& a, const N::Vec3& b)
+{
+    float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz;
 }
 
 // A flow is under way when its status is 3 or 4 (func_151, func_532).
@@ -1918,12 +1952,23 @@ static bool FlowUnderWay(int flowGlobal)
     return st == 3 || st == 4;
 }
 
-// Wanted or hunted, as the game counts it for camping (func_62 -> func_150(1, 1, 0)).
+// Wanted or hunted, as the game counts it for camping (func_62 -> func_150(1, 1, 0);
+// the decompiled scripts print a != b as "!a == b").
 static bool LawAfterYou()
 {
-    int f13 = G::Int(G::kLaw + 13, 0), f17 = G::Int(G::kLaw + 17, 0), f18 = G::Int(G::kLaw + 18, 0);
-    int f19 = G::Int(G::kLaw + 19, 0), f20 = G::Int(G::kLaw + 20, 0), f21 = G::Int(G::kLaw + 21, 0);
-    return (f18 && (f19 > 0 || f17 > 0)) || f20 > 0 || (f13 && f21 > 0);
+    int f13 = G::Int(G::kLaw + 13, 0), f15 = G::Int(G::kLaw + 15, 0), f17 = G::Int(G::kLaw + 17, 0);
+    int f18 = G::Int(G::kLaw + 18, 0), f19 = G::Int(G::kLaw + 19, 0), f20 = G::Int(G::kLaw + 20, 0);
+    int f21 = G::Int(G::kLaw + 21, 0);
+    if (f18)
+    {
+        if (f19 > 0 || f17 > 0)
+            return true;
+    }
+    else if ((uint32_t)f15 != H_LAW_DISPATCH_PENDING)
+        return false;
+    if (f20 > 0)
+        return true;
+    return f13 && f21 > 0;
 }
 
 static int CampAvailability(int ped, int player)
@@ -1936,8 +1981,11 @@ static int CampAvailability(int ped, int player)
         return C_GAME_HAS_IT;
     if (g_kneelOwnCamp < 0)
         return C_NO_LIST;
-    if (!CampKit())
+    int kit = CampKit();
+    if (kit == 0)
         return C_NO_KIT;
+    if (kit < 0)
+        return C_KIT_OFF;
     // The kneel menu's own conditions for its button, and func_21's that aren't
     // about the place, in func_21's order. (It runs every frame on its own
     // thread too, so all of them are cheap.)
@@ -1960,11 +2008,22 @@ static int CampAvailability(int ped, int player)
         return C_CRIME;
     if ((G::Int(G::kAmbush, 0) & 16) || G::Int(G::kEncounter, 0) != 0 || N::IsMinigameInProgress())
         return C_ACTIVITY;
+    if (N::IsPedInAnyVehicle(ped) || (!N::IsPedRagdoll(ped) && N::IsPedOnVehicle(ped)) || N::IsPedInAnyBoat(ped) ||
+        N::IsPlayerRidingTrain(player) || N::IsPedJacking(ped))
+        return C_VEHICLE;
     if (G::Int(G::kOnMission, 0) && !(G::Int(G::kMissionCamp, 0) & 1))
         return C_MISSION;
-    // (func_21 also says no near a spot of this stranger mission while it runs: here, while it runs)
+    // func_21's last rule: not within 12 m of this stranger mission's spot while it runs
     if (N::ScriptThreads(H_RCM_EVELYN4) > 0)
-        return C_MISSION;
+    {
+        N::Vec3 me = N::EntityCoords(ped);
+        N::Vec3 spot = {};
+        spot.x = G::Float(G::kEvelynSpot, 0.0f);
+        spot.y = G::Float(G::kEvelynSpot + 1, 0.0f);
+        spot.z = G::Float(G::kEvelynSpot + 2, 0.0f);
+        if (Dist2(me, spot) < 144.0f)
+            return C_MISSION;
+    }
     if (G::Int(G::kDistrict, -1) == 8)
         return C_GUARMA;
     if (N::ScriptThreads(H_PLAYER_CAMP) > 0 || (G::Int(G::kCampIsUp, 0) & (1 << 23)) ||
@@ -1981,12 +2040,6 @@ static int CampAvailability(int ped, int player)
     if (G::Int(G::kItemUseOff, 0) != 0)
         return C_ACTIVITY;
     return C_OK;
-}
-
-static float Dist2(const N::Vec3& a, const N::Vec3& b)
-{
-    float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
 }
 
 // A full camp (with the tent the horse carries) when the active horse is
@@ -2063,7 +2116,6 @@ static void StartCamp(int now, int ped)
 
 static void CampTick(int now, int ped)
 {
-    (void)ped;
     // The kneel menu's other buttons are held while it's still there (until
     // player_camp has Arthur up), as its own Set Up Camp takes them away.
     bool kneelOver = N::ScriptThreads(H_DYNAMIC_CRAFT) <= 0;
@@ -2080,7 +2132,22 @@ static void CampTick(int now, int ped)
     switch (g_campPhase)
     {
     case CP_LOADING:
-        if (N::HasScriptLoaded("player_camp"))
+        if (N::IsEntityDead(ped))
+        {
+            N::ScriptNoLongerNeeded("player_camp");
+            Log("Set Up Camp: the player died before the camp script had loaded; not started.");
+            g_hiddenCount = 0;
+            g_campPhase = CP_IDLE;
+        }
+        else if (age > 5000)
+        {
+            N::ScriptNoLongerNeeded("player_camp");
+            Log("ERROR: the game's camp script didn't load within 5 s.");
+            HelpText(nullptr, "The camp couldn't be set up. Try again.");
+            ShowKneelPrompts(g_kneelThread);
+            g_campPhase = CP_IDLE;
+        }
+        else if (N::HasScriptLoaded("player_camp"))
         {
             int thread = N::StartScriptWithArgs("player_camp", g_campArgs, 10, 6096);
             N::ScriptNoLongerNeeded("player_camp");
@@ -2098,14 +2165,6 @@ static void CampTick(int now, int ped)
                 ShowKneelPrompts(g_kneelThread);
                 g_campPhase = CP_IDLE;
             }
-        }
-        else if (age > 5000)
-        {
-            N::ScriptNoLongerNeeded("player_camp");
-            Log("ERROR: the game's camp script didn't load within 5 s.");
-            HelpText(nullptr, "The camp couldn't be set up. Try again.");
-            ShowKneelPrompts(g_kneelThread);
-            g_campPhase = CP_IDLE;
         }
         break;
 
@@ -2450,7 +2509,10 @@ static void ScriptMain()
                 g_campTextAskedAt = -1;
                 g_campTextSeen = false;
                 DeleteCampPrompt();
+                if (g_campPhase == CP_LOADING)
+                    N::ScriptNoLongerNeeded("player_camp");
                 g_campPhase = CP_IDLE;
+                g_hiddenCount = 0;
             }
         }
 
@@ -2481,6 +2543,8 @@ static void ScriptMain()
                 CampTick(now, ped);
             else if (!N::IsPauseMenuActive())
                 IdleTick(now, ped, player);
+            else
+                DeleteCampPrompt();   // the kneel menu's buttons aren't watched while paused: no Set Up Camp of ours
         }
 
         DrawNotification();

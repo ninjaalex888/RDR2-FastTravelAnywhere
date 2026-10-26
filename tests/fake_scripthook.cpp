@@ -164,6 +164,10 @@ struct Sim
     int   campKneelExits;              // times player_camp got Arthur up from the kneel
     int   campStateAt;                 // the fake player_camp's frame count when it changed state
     int   evelyn;                      // RCM_EVELYN_MILLER4 running
+    int   onVehicle, ragdoll, inBoat, ridingTrain, jacking;
+    int   kitCampOff, kitSimpleOff;    // a script has the camp kit disabled
+    int   disabledAskP2;               // the third argument of the last "is the kit disabled" question
+    int   campScriptLoadFrames;        // how long REQUEST_SCRIPT("player_camp") takes
     int   dupFrames;                   // frames the drawn kneel menu had two Set Up Camps
     int   campPromptsMax;              // most Set Up Camp prompts of the plugin's at once
 };
@@ -605,7 +609,7 @@ uint64_t* FS_nativeCall()
         if (!StrIs(g_args[0], "player_camp")) { g_sim.badScriptCalls++; break; }
         g_sim.scriptRequests++;
         if (!g_sim.campScriptLoaded && !g_sim.campScriptLoadIn && !g_sim.campScriptNoLoad)
-            g_sim.campScriptLoadIn = 3;
+            g_sim.campScriptLoadIn = g_sim.campScriptLoadFrames > 0 ? g_sim.campScriptLoadFrames : 1;
         break;
     case 0xE97BD36574F8B0A6ULL: Want(1); g_result[0] = StrIs(g_args[0], "player_camp") && g_sim.campScriptLoaded; break; // HAS_SCRIPT_LOADED
     case 0x0086D3067E1CFD1CULL:                                                           // SET_SCRIPT_AS_NO_LONGER_NEEDED
@@ -644,7 +648,21 @@ uint64_t* FS_nativeCall()
         break;
     }
 
+    case 0x3D10D7179D7034AFULL: {                                                         // _INVENTORY_IS_INVENTORY_ITEM_EQUIPPED (= is the item disabled)
+        Want(3);
+        uint32_t item = (uint32_t)g_args[1];
+        if (I(0) != (g_sim.backupInv ? 5 : 1)) { g_sim.badInventory++; break; }
+        g_sim.disabledAskP2 = I(2);
+        g_result[0] = (uint32_t)(item == H("KIT_CAMP") ? g_sim.kitCampOff : item == H("KIT_CAMP_SIMPLE") ? g_sim.kitSimpleOff : 0);
+        break;
+    }
+
     // ---- the game's other camping rules ----
+    case 0x67722AEB798E5FABULL: Want(2); g_result[0] = I(0) == kPlayerPed && g_sim.onVehicle; break;   // IS_PED_ON_VEHICLE
+    case 0x47E4E977581C5B55ULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.ragdoll; break;     // IS_PED_RAGDOLL
+    case 0x2E0E1C2B4F6CB339ULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.inBoat; break;      // IS_PED_IN_ANY_BOAT
+    case 0x2FB0ACADA6A238DDULL: Want(1); g_result[0] = I(0) == 0 && g_sim.ridingTrain; break;          // IS_PLAYER_RIDING_TRAIN (player 0)
+    case 0x4AE4FF911DFB61DAULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.jacking; break;     // IS_PED_JACKING
     case 0x4200F14D6F840A9AULL: Want(0); g_result[0] = g_sim.interior; break;                 // IS_INTERIOR_SCENE
     case 0x4859F1FC66A6278EULL: Want(2); g_result[0] = I(0) == kPlayerPed && g_sim.combat; break; // IS_PED_IN_COMBAT
     case 0x26934083D3F2579CULL: Want(1); g_result[0] = g_sim.recentCrime; break;              // LAW: recently committed a crime
@@ -1175,7 +1193,8 @@ enum SetWhat
     S_SET_CAMP, S_CAMPFIRE_HUD, S_HUD_BROKEN, S_NOT_ACTIVE, S_LABEL_UNREADABLE,
     S_CAMP_HERE, S_LIST_BROKEN, S_KIT_CAMP, S_KIT_SIMPLE, S_BACKUP_INV, S_INTERIOR, S_COMBAT, S_RECENT_CRIME,
     S_MINIGAME, S_ANIMAL_INTERACTION, S_CAMP_SCRIPT_EXISTS, S_CAMP_SCRIPT_NO_LOAD, S_CAMP_FAILS, S_CAMP_DOWN,
-    S_EVELYN,
+    S_EVELYN, S_ON_VEHICLE, S_RAGDOLL, S_IN_BOAT, S_RIDING_TRAIN, S_JACKING, S_KIT_CAMP_OFF, S_KIT_SIMPLE_OFF,
+    S_CAMP_SCRIPT_LOAD_FRAMES,
 };
 
 extern "C" __declspec(dllexport) void FakeSet(int what, int v)
@@ -1224,6 +1243,14 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
     case S_CAMP_FAILS:    g_sim.campFails = v; break;
     case S_CAMP_DOWN:     if (g_sim.campRunning) PlayerCampEnd(); break;   // the camp is packed up
     case S_EVELYN:        g_sim.evelyn = v; break;
+    case S_ON_VEHICLE:    g_sim.onVehicle = v; break;
+    case S_RAGDOLL:       g_sim.ragdoll = v; break;
+    case S_IN_BOAT:       g_sim.inBoat = v; break;
+    case S_RIDING_TRAIN:  g_sim.ridingTrain = v; break;
+    case S_JACKING:       g_sim.jacking = v; break;
+    case S_KIT_CAMP_OFF:  g_sim.kitCampOff = v; break;
+    case S_KIT_SIMPLE_OFF: g_sim.kitSimpleOff = v; break;
+    case S_CAMP_SCRIPT_LOAD_FRAMES: g_sim.campScriptLoadFrames = v; break;
     case S_CRAFTING:
         // the kneel menu's Craft: simple_crafting loads the CAMP text when it
         // starts (its func_30) and unloads it when it ends
@@ -1283,7 +1310,7 @@ enum GetWhat
     Q_CP_ATTR18, Q_CP_GROUP, Q_CP_TAB, Q_CP_ENABLED, Q_CP_VISIBLE, Q_GAME_PROMPTS, Q_KNEEL_OWN_CAMP,
     Q_CAMP_STARTS, Q_GAME_CAMP_STARTS, Q_CAMP_ARGC, Q_CAMP_STACK, Q_CAMP_RUNNING, Q_SCRIPT_REQUESTS,
     Q_NO_LONGER_NEEDED, Q_BAD_SCRIPT_CALLS, Q_BAD_INVENTORY, Q_DISABLED_B, Q_DISABLED_A, Q_CAMP_KNEEL_EXITS,
-    Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS,
+    Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS, Q_DISABLED_ASK_P2,
     Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 
@@ -1390,6 +1417,7 @@ extern "C" __declspec(dllexport) int FakeGet(int what)
     case Q_DUP_FRAMES:      return g_sim.dupFrames;
     case Q_CAMP_PROMPTS_MAX: return g_sim.campPromptsMax;
     case Q_CAMP_STATE:      return GI(GL_CAMP_STATE);
+    case Q_DISABLED_ASK_P2: return g_sim.disabledAskP2;
     case Q_KNEEL_VISIBLE:
     case Q_KNEEL_PROMPTS:
     {
@@ -1507,6 +1535,7 @@ extern "C" __declspec(dllexport) void FakeInit()
     g_sim.campHere = 1;          // the wilderness: the kneel menu has its own Set Up Camp
     g_sim.kitCamp = 1;
     g_sim.campScriptExists = 1;
+    g_sim.campScriptLoadFrames = 3;
     SI(GL_PLAYER, kPlayerPed);
     // Another script's prompt on E in the shared prompt list (long_update's thread),
     // which isn't the kneel menu's

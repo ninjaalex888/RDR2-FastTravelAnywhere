@@ -84,11 +84,12 @@ away to fast travel." and so on). The unlock, horse, wanted and mission
 rules can each be relaxed in FastTravelAnywhere.ini.
 
 Set Up Camp keeps all of the game's camping rules except the ones about the
-place: you need a camp kit, and it isn't added while you're wanted or have
-just committed a crime, in combat, on a mission (unless the mission lets you
-camp), indoors, in a gang hideout, at the gang's camp, in Guarma, in an area
-under lockdown, during a random encounter, an ambush or a minigame, while
-busy with your horse, or with a camp already up. If the game finds no
+place: you need a camp kit (one the game hasn't disabled for the moment), and
+it isn't added while you're wanted or have just committed a crime, in combat,
+on a mission (unless the mission lets you camp), indoors, in a gang hideout,
+at the gang's camp, in Guarma, in an area under lockdown, on a vehicle, boat
+or train, during a random encounter, an ambush or a minigame, while busy with
+your horse, or with a camp already up. If the game finds no
 campsite to use, it says so itself ("Cannot create camp in this location.").
 
 

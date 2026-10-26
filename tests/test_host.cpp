@@ -16,6 +16,7 @@ typedef int  (*PFN_FakeGet)(int);
 typedef void (*PFN_FakeText)(int, char*, int);
 typedef void (*PFN_FakeSetGlobal)(int, int);
 typedef int  (*PFN_FakeGetGlobal)(int);
+typedef void (*PFN_FakeSetGlobalF)(int, float);
 typedef void (*PFN_FakeHorse)(int, int, int, int, int, int, int, int);
 typedef void (*PFN_FakeInit)();
 
@@ -25,6 +26,7 @@ static PFN_FakeGet       FakeGet;
 static PFN_FakeText      FakeText;
 static PFN_FakeSetGlobal FakeSetGlobal;
 static PFN_FakeGetGlobal FakeGetGlobal;
+static PFN_FakeSetGlobalF FakeSetGlobalF;
 static PFN_FakeHorse     FakeHorse;
 
 static void*        g_host;
@@ -44,7 +46,8 @@ enum SetWhat
     S_SET_CAMP, S_CAMPFIRE_HUD, S_HUD_BROKEN, S_NOT_ACTIVE, S_LABEL_UNREADABLE,
     S_CAMP_HERE, S_LIST_BROKEN, S_KIT_CAMP, S_KIT_SIMPLE, S_BACKUP_INV, S_INTERIOR, S_COMBAT, S_RECENT_CRIME,
     S_MINIGAME, S_ANIMAL_INTERACTION, S_CAMP_SCRIPT_EXISTS, S_CAMP_SCRIPT_NO_LOAD, S_CAMP_FAILS, S_CAMP_DOWN,
-    S_EVELYN,
+    S_EVELYN, S_ON_VEHICLE, S_RAGDOLL, S_IN_BOAT, S_RIDING_TRAIN, S_JACKING, S_KIT_CAMP_OFF, S_KIT_SIMPLE_OFF,
+    S_CAMP_SCRIPT_LOAD_FRAMES,
 };
 // The camp scripts the fake knows, in the bit order of S_CAMP_SCRIPT, and whether they unload the CAMP text when they end.
 static const char* const kCampScripts[] = { "player_camp", "interactive_campfire", "property_use_core", "campfire_always", "sleeping_scenario" };
@@ -63,7 +66,7 @@ enum GetWhat
     Q_CP_ATTR18, Q_CP_GROUP, Q_CP_TAB, Q_CP_ENABLED, Q_CP_VISIBLE, Q_GAME_PROMPTS, Q_KNEEL_OWN_CAMP,
     Q_CAMP_STARTS, Q_GAME_CAMP_STARTS, Q_CAMP_ARGC, Q_CAMP_STACK, Q_CAMP_RUNNING, Q_SCRIPT_REQUESTS,
     Q_NO_LONGER_NEEDED, Q_BAD_SCRIPT_CALLS, Q_BAD_INVENTORY, Q_DISABLED_B, Q_DISABLED_A, Q_CAMP_KNEEL_EXITS,
-    Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS,
+    Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS, Q_DISABLED_ASK_P2,
     Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 enum { K_OFF = 0, K_DOWN, K_KNEEL, K_EXIT };
@@ -78,7 +81,8 @@ static const int GL_CAMP_FLAGS2 = 1392041, GL_CAMP_IS_UP = 9459, GL_ZONE = 18948
                  GL_AREA_FLAGS = 23118, GL_DISTRICT = 1897993, GL_STORY_CAMP = 1359044, GL_LAW = 1935630,
                  GL_ON_MISSION = 1898328, GL_MISSION_CAMP = 1914318, GL_ENCOUNTER = 1326827, GL_AMBUSH = 1393449,
                  GL_HORSE_AWAY = 4190, GL_LED_HORSE = 1900776, GL_CAMP_STATE = 43885, GL_CAMP_FLOW120 = 1353598,
-                 GL_CAMP_FLOW15 = 1836123, GL_ITEM_USE_OFF = 1935697;
+                 GL_CAMP_FLOW15 = 1836123, GL_ITEM_USE_OFF = 1935697, GL_CAMP_FORCED = 1392042,
+                 GL_INV_FLAG_A = 1931689, GL_INV_FLAG_B = 1933316, GL_EVELYN_SPOT = 1351353;
 
 static uint32_t Joaat(const char* s)
 {
@@ -235,9 +239,19 @@ static void ResetWorld()
     FakeSet(S_CAMP_SCRIPT_NO_LOAD, 0);
     FakeSet(S_CAMP_FAILS, 0);
     FakeSet(S_EVELYN, 0);
+    FakeSet(S_INVEHICLE, 0);
+    FakeSet(S_ON_VEHICLE, 0);
+    FakeSet(S_RAGDOLL, 0);
+    FakeSet(S_IN_BOAT, 0);
+    FakeSet(S_RIDING_TRAIN, 0);
+    FakeSet(S_JACKING, 0);
+    FakeSet(S_KIT_CAMP_OFF, 0);
+    FakeSet(S_KIT_SIMPLE_OFF, 0);
+    FakeSet(S_CAMP_SCRIPT_LOAD_FRAMES, 3);
     static const int zero[] = { GL_CAMP_FLAGS2, GL_CAMP_IS_UP, GL_ZONE, GL_ZONE_AREA, GL_DISTRICT, GL_STORY_CAMP,
                                 GL_ON_MISSION, GL_MISSION_CAMP, GL_ENCOUNTER, GL_AMBUSH, GL_HORSE_AWAY, GL_LED_HORSE,
-                                GL_CAMP_FLOW120, GL_CAMP_FLOW15, GL_ITEM_USE_OFF };
+                                GL_CAMP_FLOW120, GL_CAMP_FLOW15, GL_ITEM_USE_OFF, GL_CAMP_FORCED, GL_INV_FLAG_A,
+                                GL_INV_FLAG_B, GL_EVELYN_SPOT, GL_EVELYN_SPOT + 1, GL_EVELYN_SPOT + 2 };
     for (int g : zero)
         FakeSetGlobal(g, 0);
     for (int f = 13; f <= 21; f++)
@@ -320,9 +334,10 @@ int main()
     FakeText      = (PFN_FakeText)GetProcAddress(fake, "FakeText");
     FakeSetGlobal = (PFN_FakeSetGlobal)GetProcAddress(fake, "FakeSetGlobal");
     FakeGetGlobal = (PFN_FakeGetGlobal)GetProcAddress(fake, "FakeGetGlobal");
+    FakeSetGlobalF = (PFN_FakeSetGlobalF)GetProcAddress(fake, "FakeSetGlobalF");
     FakeHorse     = (PFN_FakeHorse)GetProcAddress(fake, "FakeHorse");
     if (!FakeGetScriptMain || !FakeSetHostFiber || !FakeInit || !FakeGameTick || !FakeSet || !FakeGet ||
-        !FakeText || !FakeSetGlobal || !FakeGetGlobal || !FakeHorse)
+        !FakeText || !FakeSetGlobal || !FakeGetGlobal || !FakeHorse || !FakeSetGlobalF)
     {
         printf("fake Script Hook is missing test exports\n");
         return 2;
@@ -1332,11 +1347,44 @@ int main()
                                                                           FakeGet(Q_BAD_INVENTORY) == 0);
         StandUp();
 
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_KIT_CAMP_OFF, 1);                  // a script has the camp kit disabled
+        Kneel();
+        Check("the camp kit disabled by a script: no Set Up Camp (the game's button would refuse it)",
+              FakeGet(Q_CAMP_PROMPTS) == 0 && LogHas("not added: the game has the camp kit disabled"));
+        FakeSet(S_KIT_SIMPLE, 1);
+        Frames(2);
+        Check("...but a simple camp kit that isn't: there, as the button tries that one next", FakeGet(Q_CAMP_PROMPTS) == 1);
+        FakeSet(S_KIT_SIMPLE_OFF, 1);
+        Frames(2);
+        Check("...both disabled: gone", FakeGet(Q_CAMP_PROMPTS) == 0);
+        FakeSetGlobal(GL_CAMP_FORCED, 1);            // the game setting up a camp itself (Global_1392040.f_2)
+        Frames(2);
+        Check("...unless the game is setting up a camp itself", FakeGet(Q_CAMP_PROMPTS) == 1);
+        FakeSetGlobal(GL_CAMP_FORCED, 0);
+        FakeSetGlobal(GL_INV_FLAG_A, 1);
+        Frames(2);
+        Check("...asked with the game's own third argument", FakeGet(Q_DISABLED_ASK_P2) == 1);
+        StandUp();
+
         // The game's camping rules other than the place.
-        CampRule("wanted", [] { FakeSetGlobal(GL_LAW + 20, 1); }, [] { FakeSetGlobal(GL_LAW + 20, 0); },
-                 "not added: wanted");
-        CampRule("the law closing in", [] { FakeSetGlobal(GL_LAW + 18, 1); FakeSetGlobal(GL_LAW + 19, 2); },
+        CampRule("wanted", [] { FakeSetGlobal(GL_LAW + 18, 1); FakeSetGlobal(GL_LAW + 19, 2); },
                  [] { FakeSetGlobal(GL_LAW + 18, 0); FakeSetGlobal(GL_LAW + 19, 0); }, "not added: wanted");
+        CampRule("the law on its way (a dispatch pending)",
+                 [] { FakeSetGlobal(GL_LAW + 15, (int)Joaat("LAW_DISPATCH_PENDING")); FakeSetGlobal(GL_LAW + 20, 1); },
+                 [] { FakeSetGlobal(GL_LAW + 20, 0); }, "not added: wanted");
+        CampRule("witnesses about a crime (a dispatch pending)",
+                 [] { FakeSetGlobal(GL_LAW + 15, (int)Joaat("LAW_DISPATCH_PENDING")); FakeSetGlobal(GL_LAW + 13, 1);
+                      FakeSetGlobal(GL_LAW + 21, 1); },
+                 [] { FakeSetGlobal(GL_LAW + 21, 0); }, "not added: wanted");
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSetGlobal(GL_LAW + 20, 1);               // a law value left over, nothing pending and no wanted flag
+        Kneel();
+        Check("a law value left over with nothing pending: Set Up Camp, as the game has it (it checks the dispatch first)",
+              FakeGet(Q_CAMP_PROMPTS) == 1);
+        StandUp();
         CampRule("a crime just committed", [] { FakeSet(S_RECENT_CRIME, 1); }, [] { FakeSet(S_RECENT_CRIME, 0); },
                  "not added: a crime was committed recently");
         CampRule("in combat", [] { FakeSet(S_COMBAT, 1); }, [] { FakeSet(S_COMBAT, 0); }, "not added: in combat");
@@ -1345,6 +1393,23 @@ int main()
         CampRule("on a mission that lets you camp, then off it",
                  [] { FakeSetGlobal(GL_ON_MISSION, 1); FakeSetGlobal(GL_MISSION_CAMP, 2); },
                  [] { FakeSetGlobal(GL_MISSION_CAMP, 3); }, "not added: on a mission");
+        CampRule("in a vehicle", [] { FakeSet(S_INVEHICLE, 1); }, [] { FakeSet(S_INVEHICLE, 0); },
+                 "not added: on a vehicle, boat or train");
+        CampRule("standing on a wagon", [] { FakeSet(S_ON_VEHICLE, 1); }, [] { FakeSet(S_ON_VEHICLE, 0); },
+                 "not added: on a vehicle, boat or train");
+        CampRule("in a boat", [] { FakeSet(S_IN_BOAT, 1); }, [] { FakeSet(S_IN_BOAT, 0); },
+                 "not added: on a vehicle, boat or train");
+        CampRule("riding a train", [] { FakeSet(S_RIDING_TRAIN, 1); }, [] { FakeSet(S_RIDING_TRAIN, 0); },
+                 "not added: on a vehicle, boat or train");
+        CampRule("jacking", [] { FakeSet(S_JACKING, 1); }, [] { FakeSet(S_JACKING, 0); },
+                 "not added: on a vehicle, boat or train");
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_ON_VEHICLE, 1);
+        FakeSet(S_RAGDOLL, 1);                       // on a wagon, but ragdolling: the game lets that through
+        Kneel();
+        Check("on a wagon while ragdolling: not counted as on it, as the game has it", FakeGet(Q_CAMP_PROMPTS) == 1);
+        StandUp();
         CampRule("in a gang hideout", [] { FakeSetGlobal(GL_ZONE, 4); }, [] { FakeSetGlobal(GL_ZONE, 0); },
                  "not added: in a gang hideout");
         CampRule("at the gang's camp", [] { FakeSetGlobal(GL_STORY_CAMP, 1 << 9); }, [] { FakeSetGlobal(GL_STORY_CAMP, 0); },
@@ -1379,8 +1444,16 @@ int main()
                  [] { FakeSetGlobal(GL_CAMP_FLOW15, 9); FakeSetGlobal(GL_FLOW_STATUS + 1 + 9 * 7 + 1, 4); },
                  [] { FakeSetGlobal(GL_FLOW_STATUS + 1 + 9 * 7 + 1, 0); }, "not added: a mission with its own camp spot");
         FakeSetGlobal(GL_FLOW_STATUS + 1 + 7 * 7 + 1, 0);
-        CampRule("a stranger mission that bans camping near it", [] { FakeSet(S_EVELYN, 1); }, [] { FakeSet(S_EVELYN, 0); },
-                 "not added: on a mission");
+        CampRule("within 12 m of a stranger mission's spot while it runs",
+                 [] { FakeSet(S_EVELYN, 1); FakeSetGlobalF(GL_EVELYN_SPOT, 3.0f); FakeSetGlobalF(GL_EVELYN_SPOT + 1, 4.0f); },
+                 [] { FakeSet(S_EVELYN, 0); }, "not added: on a mission");
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_EVELYN, 1);
+        FakeSetGlobalF(GL_EVELYN_SPOT, 100.0f);      // that mission running, its spot 100 m away
+        Kneel();
+        Check("...farther away: Set Up Camp", FakeGet(Q_CAMP_PROMPTS) == 1);
+        StandUp();
         CampRule("laying bait (no kit used meanwhile)", [] { FakeSetGlobal(GL_ITEM_USE_OFF, 1); },
                  [] { FakeSetGlobal(GL_ITEM_USE_OFF, 0); }, "not added: something is going on nearby");
 
@@ -1452,6 +1525,45 @@ int main()
               FakeGet(Q_CAMP_STARTS) == 0 && HelpHas("couldn't be set up") && FakeGet(Q_NO_LONGER_NEEDED) == 1 &&
               FakeGet(Q_CAMP_PROMPTS) == 1 && FakeGet(Q_FT_PROMPTS) == 1 && LogHas("didn't load within 5 s") &&
               FakeGet(Q_KNEEL_PROMPTS) == 2 && FakeGet(Q_KNEEL_VISIBLE) == 2);
+        StandUp();
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_CAMP_SCRIPT_LOAD_FRAMES, 30);      // the camp script slow to load...
+        Kneel();
+        Press(E);
+        Frames(5);
+        FakeSet(S_PLAYERDEAD, 1);                    // ...and the player dies meanwhile
+        Frames(40);
+        Check("the player dies while player_camp is loading: not started, the script let go of",
+              FakeGet(Q_CAMP_STARTS) == 0 && FakeGet(Q_NO_LONGER_NEEDED) == 1 && LogHas("the player died before"));
+        FakeSet(S_PLAYERDEAD, 0);
+        StandUp();
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_CAMP_SCRIPT_LOAD_FRAMES, 30);
+        Kneel();
+        Press(E);
+        Frames(3);
+        FakeSet(S_ONLINE, 1);                        // an online session starts meanwhile
+        Frames(40);
+        FakeSet(S_ONLINE, 0);
+        Frames(3);
+        Check("an online session while it's loading: not started, the script let go of",
+              FakeGet(Q_CAMP_STARTS) == 0 && FakeGet(Q_NO_LONGER_NEEDED) == 1);
+        StandUp();
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        Kneel();
+        FakeSet(S_PAUSED, 1);
+        Frames(2);
+        Check("pause menu: Set Up Camp taken away (the kneel menu's buttons aren't watched meanwhile)",
+              FakeGet(Q_CAMP_PROMPTS) == 0);
+        FakeSet(S_PAUSED, 0);
+        Frames(2);
+        Check("...and back afterwards", FakeGet(Q_CAMP_PROMPTS) == 1);
         StandUp();
 
         ResetWorld();
