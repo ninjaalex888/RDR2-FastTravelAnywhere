@@ -6,7 +6,9 @@
     bottom-right corner: Craft (R), Set Up Camp (E) and Leave (F). This plugin
     adds Fast Travel to that menu on Space (A on a controller), the same button
     a campfire uses, and it runs the game's own fast travel: the same menu of
-    places, and the same trip with your horse.
+    places, and the same trip with your horse. And where the game leaves Set Up
+    Camp out of the menu (in a town, say), it adds it, and the game makes camp
+    at the nearest of its campsites (see "Set Up Camp anywhere").
 
     How the game does it (build 1491.50, from the decompiled game scripts)
     ----------------------------------------------------------------------
@@ -62,7 +64,7 @@
 #endif
 
 #define FTA_NAME    "Fast Travel Anywhere"
-#define FTA_VERSION "1.0.1"
+#define FTA_VERSION "1.1.0"
 
 // ===========================================================================
 // Paths & logging
@@ -149,6 +151,7 @@ struct Settings
     bool     showLoadMessage;
     bool     debugLog;
     bool     lockMovementInMenu;
+    bool     campAnywhere;
     uint32_t promptControl;
     char     promptControlName[64];
     char     promptText[96];
@@ -169,6 +172,7 @@ static void DefaultSettings(Settings& s)
     s.showLoadMessage     = true;
     s.debugLog            = false;
     s.lockMovementInMenu  = false;
+    s.campAnywhere        = true;
     strcpy(s.promptControlName, "INPUT_CONTEXT_A");
     s.promptControl       = Joaat("INPUT_CONTEXT_A");
     s.promptText[0]       = 0;
@@ -177,11 +181,17 @@ static void DefaultSettings(Settings& s)
 // Written when the file is missing (CRLF, for Notepad).
 static const char kDefaultIni[] =
     "; Fast Travel Anywhere settings.\r\n"
-    "; Changes take effect the next time you kneel (hold E), no restart needed.\r\n"
+    "; Changes take effect within a couple of seconds, no restart needed.\r\n"
     "[FastTravelAnywhere]\r\n"
     "\r\n"
     "; 1 = add Fast Travel to the kneel menu, 0 = off\r\n"
     "Enabled=1\r\n"
+    "\r\n"
+    "; 1 = Set Up Camp in the kneel menu wherever you kneel, towns included. Where the game\r\n"
+    "; leaves it out, the mod adds it, and the game makes camp at the nearest of its campsites\r\n"
+    "; (from a town, just outside it). Its other rules stay: not while wanted, in combat,\r\n"
+    "; on a mission, indoors, in a gang hideout or with a camp already up. 0 = off.\r\n"
+    "SetUpCampAnywhere=1\r\n"
     "\r\n"
     "; The game's own rules for fast travel at a campfire (1 = follow them):\r\n"
     "; fast travel has to be unlocked, as for your camp (Arthur: the lodging upgrade in the camp ledger).\r\n"
@@ -308,6 +318,7 @@ static void LoadSettings()
             else if (!_stricmp(key, "ShowLoadMessage"))     g_cfg.showLoadMessage = ParseBool(val, g_cfg.showLoadMessage);
             else if (!_stricmp(key, "DebugLog"))            g_cfg.debugLog = ParseBool(val, g_cfg.debugLog);
             else if (!_stricmp(key, "LockMovementInMenu"))  g_cfg.lockMovementInMenu = ParseBool(val, g_cfg.lockMovementInMenu);
+            else if (!_stricmp(key, "SetUpCampAnywhere"))   g_cfg.campAnywhere = ParseBool(val, g_cfg.campAnywhere);
             else if (!_stricmp(key, "PromptText"))
             {
                 strncpy(g_cfg.promptText, val, sizeof g_cfg.promptText - 1);
@@ -331,10 +342,10 @@ static void LoadSettings()
     if (GetFileAttributesExA(g_iniPath, GetFileExInfoStandard, &a))
         g_iniStamp = a.ftLastWriteTime;
 
-    Log("Settings: Enabled=%d RequireUnlock=%d RequireHorseNearby=%d AllowWhenWanted=%d "
+    Log("Settings: Enabled=%d SetUpCampAnywhere=%d RequireUnlock=%d RequireHorseNearby=%d AllowWhenWanted=%d "
         "AllowOnMissions=%d ShowWhenUnavailable=%d StandUp=%d PromptControl=%s (0x%08X) "
         "PromptText=\"%s\" DebugLog=%d LockMovementInMenu=%d",
-        g_cfg.enabled, g_cfg.requireUnlock, g_cfg.requireHorseNearby, g_cfg.allowWhenWanted,
+        g_cfg.enabled, g_cfg.campAnywhere, g_cfg.requireUnlock, g_cfg.requireHorseNearby, g_cfg.allowWhenWanted,
         g_cfg.allowOnMissions, g_cfg.showWhenUnavailable, g_cfg.standUp, g_cfg.promptControlName,
         g_cfg.promptControl, g_cfg.promptText, g_cfg.debugLog, g_cfg.lockMovementInMenu);
 }
@@ -509,6 +520,27 @@ namespace N
     static inline bool IsPedOnMount(int p)       { return Invoke<int>(0x460BC76A0E10655EULL, p) != 0; }           // PED::IS_PED_ON_MOUNT
 
     static inline int  ScriptThreads(uint32_t h) { return Invoke<int>(0x8E34C953364A76DDULL, h); }                // SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH
+    static inline void ThreadIteratorReset()     { InvokeVoid(0x39382EB8DCD8684DULL); }                           // SCRIPT::SCRIPT_THREAD_ITERATOR_RESET
+    static inline int  ThreadIteratorNext()      { return Invoke<int>(0x3CE3FB167E837D7CULL); }                    // SCRIPT::SCRIPT_THREAD_ITERATOR_GET_NEXT_THREAD_ID
+    static inline uint32_t HashOfThread(int id)  { return Invoke<uint32_t>(0x724CB89D35B283D0ULL, id); }           // SCRIPT::_GET_HASH_OF_THREAD
+    static inline bool DoesScriptExist(const char* s)  { return Invoke<int>(0x552B171E3F69E5AEULL, s) != 0; }      // SCRIPT::DOES_SCRIPT_EXIST
+    static inline void RequestScript(const char* s)    { InvokeVoid(0x46ED607DDD40D7FEULL, s); }                  // SCRIPT::REQUEST_SCRIPT
+    static inline bool HasScriptLoaded(const char* s)  { return Invoke<int>(0xE97BD36574F8B0A6ULL, s) != 0; }      // SCRIPT::HAS_SCRIPT_LOADED
+    static inline void ScriptNoLongerNeeded(const char* s) { InvokeVoid(0x0086D3067E1CFD1CULL, s); }              // SCRIPT::SET_SCRIPT_AS_NO_LONGER_NEEDED
+    static inline int  StartScriptWithArgs(const char* s, uint64_t* args, int argc, int stack)
+    { return Invoke<int>(0xB8BA7F44DF1575E1ULL, s, args, argc, stack); }                                          // SCRIPT::START_NEW_SCRIPT_WITH_ARGS
+
+    // Inventory (the camp kit)
+    static inline bool ItemKeyValid(uint32_t item)        { return Invoke<int>(0x6D5D51B188333FD1ULL, item, 0) != 0; } // ITEMDATABASE::_ITEMDATABASE_IS_KEY_VALID
+    static inline bool UsingBackupInventory()             { return Invoke<int>(0x7C7E4AB748EA3B07ULL) != 0; }    // INVENTORY::_INVENTORY_IS_USING_BACKUP_INVENTORY
+    static inline int  ItemCount(int inv, uint32_t item)  { return Invoke<int>(0xE787F05DFC977BDEULL, inv, item, 0); } // INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID
+
+    // What the game checks before it lets you make camp (dynamic_craft_scenario func_21)
+    static inline bool IsInteriorScene()             { return Invoke<int>(0x4200F14D6F840A9AULL) != 0; }        // INTERIOR::IS_INTERIOR_SCENE
+    static inline bool IsPedInCombat(int p)          { return Invoke<int>(0x4859F1FC66A6278EULL, p, 0) != 0; }  // PED::IS_PED_IN_COMBAT
+    static inline bool RecentCrime(int player)       { return Invoke<int>(0x26934083D3F2579CULL, player) != 0; } // LAW::_0x26934083D3F2579C ("recently committed a crime")
+    static inline bool IsMinigameInProgress()        { return Invoke<int>(0xF4D8BCD052E7EA1BULL) != 0; }        // MISC::IS_MINIGAME_IN_PROGRESS
+    static inline bool IsAnimalInteractionRunning(int p) { return Invoke<int>(0x7FC84E85D98F063DULL, p) != 0; } // PED::_IS_ANIMAL_INTERACTION_RUNNING
 
     // The kneel. dynamic_craft_scenario shows its prompts once the kneel's
     // animation event fires or IS_PED_ACTIVE_IN_SCENARIO(player, 0), while the
@@ -537,6 +569,7 @@ namespace N
     static inline void PromptSetEnabled(int p, int on)        { InvokeVoid(0x8A0FB4D03A630D21ULL, p, on); }       // HUD::_UI_PROMPT_SET_ENABLED
     static inline void PromptSetVisible(int p, int on)        { InvokeVoid(0x71215ACCFDE075EEULL, p, on); }       // HUD::_UI_PROMPT_SET_VISIBLE
     static inline bool PromptIsJustReleased(int p)            { return Invoke<int>(0x635CC82FA297A827ULL, p) != 0; } // HUD::_UI_PROMPT_IS_JUST_RELEASED
+    static inline bool PromptIsJustPressed(int p)             { return Invoke<int>(0x2787CC611D3FACC5ULL, p) != 0; } // HUD::_UI_PROMPT_IS_JUST_PRESSED
     static inline bool PromptIsValid(int p)                   { return Invoke<int>(0x347469FBDD1589A9ULL, p) != 0; } // HUD::_UI_PROMPT_IS_VALID
     static inline void PromptDelete(int p)                    { InvokeVoid(0x00EDE88D4D13CF59ULL, p); }           // HUD::_UI_PROMPT_DELETE
 
@@ -636,6 +669,29 @@ namespace G
     static const int kMenuStopA   = 1357517;  // Global_1357517: short_update closes the menu while set (func_503)
     static const int kMenuStopB   = 1935690;  // Global_1935689.f_1: likewise (func_504)
 
+    // Set Up Camp: dynamic_craft_scenario's func_21 (where the game lets you camp), its Set Up
+    // Camp button, and player_camp.
+    static const int kPromptList  = 1945188;  // Global_1945188[slot /*18*/]: prompts made through the scripts' shared helper
+                                              //   (f_1 bit 2 in use, f_3 the prompt, f_4 its control, f_16 the script's thread)
+    static const int kCampFlags2  = 1392041;  // Global_1392040.f_1: bit 0 = a script has camping blocked (unless bit 9)
+    static const int kCampIsUp    = 9459;     // Global_40.f_9419: bit 23 = "The camp has already been set up"
+    static const int kZone        = 1894899;  // Global_1894899: bit 2 = in a gang hideout
+    static const int kZoneArea    = 1894901;  // Global_1894899.f_2: the area you're in (-1 = none)
+    static const int kAreaFlags   = 23118;    // Global_23118[area /*11*/]: bit 25 = the area is under lockdown
+    static const int kDistrict    = 1897993;  // Global_1897952.f_41: the district you're in (8 = Guarma)
+    static const int kStoryCamp   = 1359044;  // Global_1357549.f_1495: bit 9 = at the gang's camp or Beecher's Hope
+    static const int kLaw         = 1935630;  // Global_1935630: the law's pursuit (f_13, f_17 to f_21)
+    static const int kOnMission   = 1898328;  // Global_1898164.f_164: on a mission (short_update works it out each frame)
+    static const int kMissionCamp = 1914318;  // Global_1914296.f_22: bit 0 = the mission lets you camp
+    static const int kEncounter   = 1326827;  // Global_1310750.f_16077: the thread of a random encounter under way
+    static const int kAmbush      = 1393449;  // Global_1393447.f_2: bit 4 = an ambush under way
+    static const int kHorseAway   = 4190;     // Global_40.f_1095.f_3054.f_1: set while the active horse is away
+    static const int kLedHorse    = 1900776;  // Global_1900383.f_393: a horse you're leading
+    static const int kCampState   = 43885;    // Global_43885: player_camp's state (14 = it gave up)
+    static const int kCampFlow120 = 1353598;  // Global_1347702[120 /*49*/].f_15: a flow whose mission has its own camp spot
+    static const int kCampFlow15  = 1836123;  // Global_1835011[15 /*74*/].f_1: likewise
+    static const int kItemUseOff  = 1935697;  // Global_1935689.f_8: item use held (bait being laid): the button uses no kit then
+
     // Bits of kFtFlags (short_update func_80)
     static const int FT_MUSIC  = 1;   // play the fast travel music
     static const int FT_OPEN   = 4;   // open the fast travel menu
@@ -696,7 +752,8 @@ static const int kRestGroup = 342152817; // the kneel menu's prompt group ("REST
 static uint32_t H_DYNAMIC_CRAFT, H_SHORT_UPDATE, H_CAMERA_ITEM, H_SIMPLE_CRAFTING, H_JOURNAL;
 static uint32_t H_PLAYER_CAMP, H_INTERACTIVE_CAMPFIRE, H_PROPERTY_USE, H_CAMPFIRE_ALWAYS, H_SLEEPING;
 static uint32_t H_FAST_TRAVEL_MENU, H_PLAYER_MENU;
-static uint32_t H_INPUT_CONTEXT_X, H_INPUT_CONTEXT_Y, H_INPUT_JUMP;
+static uint32_t H_INPUT_CONTEXT_X, H_INPUT_CONTEXT_Y, H_INPUT_CONTEXT_B, H_INPUT_JUMP;
+static uint32_t H_KIT_CAMP, H_KIT_CAMP_SIMPLE, H_RCM_EVELYN4;
 static uint32_t H_INPUT_MOVE_LR, H_INPUT_MOVE_UD, H_FRONTEND_PAUSE, H_FRONTEND_PAUSE_ALT, H_CTX_FRONTEND_MENU;
 static uint32_t H_KNEEL_EXIT;
 
@@ -716,6 +773,10 @@ static void InitHashes()
     H_PLAYER_MENU      = Joaat("PLAYER_MENU");
     H_INPUT_CONTEXT_X  = Joaat("INPUT_CONTEXT_X");
     H_INPUT_CONTEXT_Y  = Joaat("INPUT_CONTEXT_Y");
+    H_INPUT_CONTEXT_B  = Joaat("INPUT_CONTEXT_B");
+    H_KIT_CAMP         = Joaat("KIT_CAMP");
+    H_KIT_CAMP_SIMPLE  = Joaat("KIT_CAMP_SIMPLE");
+    H_RCM_EVELYN4      = Joaat("RCM_EVELYN_MILLER4");
     H_INPUT_JUMP       = Joaat("INPUT_JUMP");
     H_INPUT_MOVE_LR    = Joaat("INPUT_MOVE_LR");
     H_INPUT_MOVE_UD    = Joaat("INPUT_MOVE_UD");
@@ -1199,6 +1260,8 @@ static void DeletePrompt()
     g_promptEnabled = -1;
 }
 
+static void DeleteCampPrompt();   // the Set Up Camp prompt (see "Set Up Camp anywhere")
+
 // Built the way the game builds a campfire's Fast Travel prompt (player_camp
 // func_158 -> func_53, mode 2: a tap that fires on release), with the priority
 // the kneel menu gives its own prompts (1), then put in the kneel menu's group
@@ -1437,6 +1500,7 @@ static void StartRequest(int now)
         G::Set(G::kCampFlags, camp | G::CAMP_AT_FIRE);
     G::Set(G::kFtFlags, (fl & ~G::FT_CLOSE) | G::FT_OPEN);   // a leftover close (16) would shut the new menu
     DeletePrompt();
+    DeleteCampPrompt();
     Log("Fast Travel pressed: asking the game to open its fast travel menu "
         "(flags %d -> %d, camp bit 23 %s).", fl, (fl & ~G::FT_CLOSE) | G::FT_OPEN,
         g_weSetCampBit ? "set by us" : "already set by the game");
@@ -1661,6 +1725,474 @@ static void FlowTick(int now, int ped)
 }
 
 // ===========================================================================
+// Set Up Camp anywhere
+// ===========================================================================
+//
+// The kneel menu has Set Up Camp (E) only where the game lets you make camp:
+// dynamic_craft_scenario adds it (state 1 -> 2) if its func_21 says yes, and
+// that says no in a town or an interior, near train tracks, next to someone
+// with a mission for you, and so on. Where it's left out, the plugin adds the
+// same button, and a press starts the game's camp the way that button does
+// (func_27 for KIT_CAMP): player_camp, with the same arguments. player_camp
+// does the rest as always: Arthur gets up and pitches camp, the screen fades,
+// and the camp goes up at the nearest of the game's campsites (its list of
+// camping locations per district, func_72), which from a town is outside it.
+//
+// The button is added only once the kneel menu's own prompts have been found
+// in the game's shared prompt list (Global_1945188) without a Set Up Camp
+// among them, so there are never two. The game's camping rules that aren't
+// about the place still apply, as func_21 has them.
+
+enum CampReason
+{
+    C_OK = 0,
+    C_OFF,          // SetUpCampAnywhere=0
+    C_UNSUPPORTED,  // the script globals don't look like build 1491.50
+    C_GAME_HAS_IT,  // the kneel menu has its own Set Up Camp here
+    C_NO_LIST,      // the kneel menu's own prompts weren't found: no second button risked
+    C_NO_KIT,
+    C_CAMP_UP,      // a camp is already up, or you're at a campsite
+    C_BLOCKED,      // a script has camping blocked
+    C_HIDEOUT,
+    C_STORY_CAMP,   // at the gang's camp or Beecher's Hope
+    C_INTERIOR,
+    C_COMBAT,
+    C_WANTED,
+    C_CRIME,
+    C_ACTIVITY,     // a random encounter, an ambush, a minigame, your horse, laying bait
+    C_MISSION,
+    C_GUARMA,
+    C_LOCKDOWN,
+    C_STORY_SPOT,   // a mission whose camp goes to a spot of its own
+};
+
+static const char* CampReasonName(int r)
+{
+    switch (r)
+    {
+    case C_OK:          return "added (the kneel menu leaves its own out here)";
+    case C_OFF:         return "off (SetUpCampAnywhere=0)";
+    case C_UNSUPPORTED: return "off: the game's script globals don't match game build 1491.50";
+    case C_GAME_HAS_IT: return "the kneel menu has its own here";
+    case C_NO_LIST:     return "not added: the kneel menu's own buttons weren't found in the game's prompt list, "
+                               "so the mod can't be sure it wouldn't make a second one";
+    case C_NO_KIT:      return "not added: no camp kit";
+    case C_CAMP_UP:     return "not added: a camp is already up";
+    case C_BLOCKED:     return "not added: the game has camping blocked right now";
+    case C_HIDEOUT:     return "not added: in a gang hideout";
+    case C_STORY_CAMP:  return "not added: at the gang's camp";
+    case C_INTERIOR:    return "not added: indoors";
+    case C_COMBAT:      return "not added: in combat";
+    case C_WANTED:      return "not added: wanted";
+    case C_CRIME:       return "not added: a crime was committed recently";
+    case C_ACTIVITY:    return "not added: something is going on nearby";
+    case C_MISSION:     return "not added: on a mission";
+    case C_GUARMA:      return "not added: in Guarma";
+    case C_LOCKDOWN:    return "not added: the area is under lockdown";
+    case C_STORY_SPOT:  return "not added: a mission with its own camp spot is under way";
+    }
+    return "?";
+}
+
+static int  g_kneelThread     = 0;    // dynamic_craft_scenario's thread
+static int  g_kneelOwnCamp    = -2;   // its own Set Up Camp: 1 there, 0 left out, -1 its prompts not found, -2 not looked yet
+static int  g_kneelScanAt     = 0;
+static int  g_campPrompt      = 0;
+static int  g_lastCampReason  = -1;
+
+enum CampPhase
+{
+    CP_IDLE,
+    CP_LOADING,    // player_camp requested
+    CP_STARTED,    // player_camp started: holding the kneel menu's buttons until Arthur is up
+};
+static int      g_campPhase   = CP_IDLE;
+static int      g_campPhaseAt = 0;
+static int      g_campState   = 0;    // player_camp's last state seen (it sets Global_43885 back to 0 as it ends)
+static uint64_t g_campArgs[10];
+
+// While player_camp gets going, the kneel menu's own buttons are hidden, as
+// its Set Up Camp takes them away (func_24): they're its prompts, so only
+// hidden, never deleted, and shown again if the camp doesn't start.
+struct HiddenPrompt { int slot, prompt; };
+static HiddenPrompt g_hidden[8];
+static int          g_hiddenCount = 0;
+
+static void HideKneelPrompts(int thread)
+{
+    g_hiddenCount = 0;
+    if (!thread)
+        return;
+    for (int slot = 0; slot < 48 && g_hiddenCount < 8; slot++)
+    {
+        int base = G::kPromptList + 1 + slot * 18;
+        if ((G::Int(base + 1, 0) & 2) == 0 || G::Int(base + 16, 0) != thread)
+            continue;
+        int p = G::Int(base + 3, 0);
+        if (!N::PromptIsValid(p))
+            continue;
+        N::PromptSetVisible(p, 0);
+        g_hidden[g_hiddenCount++] = { slot, p };
+    }
+}
+
+static void ShowKneelPrompts(int thread)
+{
+    for (int i = 0; i < g_hiddenCount; i++)
+    {
+        int base = G::kPromptList + 1 + g_hidden[i].slot * 18;
+        // still the kneel menu's prompt in that slot
+        if ((G::Int(base + 1, 0) & 2) && G::Int(base + 16, 0) == thread && G::Int(base + 3, 0) == g_hidden[i].prompt &&
+            N::PromptIsValid(g_hidden[i].prompt))
+            N::PromptSetVisible(g_hidden[i].prompt, 1);
+    }
+    g_hiddenCount = 0;
+}
+
+static int FindThread(uint32_t hash)
+{
+    N::ThreadIteratorReset();
+    for (int i = 0; i < 1000; i++)
+    {
+        int id = N::ThreadIteratorNext();
+        if (id == 0)
+            break;
+        if (N::HashOfThread(id) == hash)
+            return id;
+    }
+    return 0;
+}
+
+// The kneel menu's own prompts in the game's shared prompt list (its func_19
+// and func_53 put each one in a slot: f_1 bit 2 in use, f_3 the prompt, f_4
+// its control, f_16 the thread that made it). 1 if its Set Up Camp (E) is
+// among them, 0 if not, -1 if none of its prompts are found (its Leave is
+// always there, so then the list isn't where the plugin looks).
+static int KneelOwnSetUpCamp(int thread)
+{
+    if (!thread)
+        return -1;
+    bool found = false, camp = false;
+    for (int slot = 0; slot < 48; slot++)
+    {
+        int base = G::kPromptList + 1 + slot * 18;
+        if ((G::Int(base + 1, 0) & 2) == 0 || G::Int(base + 16, 0) != thread)
+            continue;
+        if (!N::PromptIsValid(G::Int(base + 3, 0)))
+            continue;
+        found = true;
+        if ((uint32_t)G::Int(base + 4, 0) == H_INPUT_CONTEXT_Y)
+            camp = true;
+    }
+    return found ? (camp ? 1 : 0) : -1;
+}
+
+static void ScanKneelPrompts()
+{
+    g_kneelThread  = FindThread(H_DYNAMIC_CRAFT);
+    g_kneelOwnCamp = KneelOwnSetUpCamp(g_kneelThread);
+    if (g_cfg.debugLog)
+        Log("The kneel menu's own buttons (thread %d): Set Up Camp %s.", g_kneelThread,
+            g_kneelOwnCamp > 0 ? "there" : g_kneelOwnCamp == 0 ? "left out" : "not found");
+}
+
+// The camp kit the kneel menu's Set Up Camp would use (func_15: the item in
+// the player's inventory, the backup one while it's in use).
+static uint32_t CampKit()
+{
+    int inv = N::UsingBackupInventory() ? 5 : 1;
+    if (N::ItemKeyValid(H_KIT_CAMP) && N::ItemCount(inv, H_KIT_CAMP) >= 1)
+        return H_KIT_CAMP;
+    if (N::ItemKeyValid(H_KIT_CAMP_SIMPLE) && N::ItemCount(inv, H_KIT_CAMP_SIMPLE) >= 1)
+        return H_KIT_CAMP_SIMPLE;
+    return 0;
+}
+
+// A flow is under way when its status is 3 or 4 (func_151, func_532).
+static bool FlowUnderWay(int flowGlobal)
+{
+    int flow = G::Int(flowGlobal, 0);
+    if (flow <= 0 || flow >= 771)
+        return false;
+    int st = G::Int(G::kFlowStatus + 1 + flow * 7 + 1, -1);
+    return st == 3 || st == 4;
+}
+
+// Wanted or hunted, as the game counts it for camping (func_62 -> func_150(1, 1, 0)).
+static bool LawAfterYou()
+{
+    int f13 = G::Int(G::kLaw + 13, 0), f17 = G::Int(G::kLaw + 17, 0), f18 = G::Int(G::kLaw + 18, 0);
+    int f19 = G::Int(G::kLaw + 19, 0), f20 = G::Int(G::kLaw + 20, 0), f21 = G::Int(G::kLaw + 21, 0);
+    return (f18 && (f19 > 0 || f17 > 0)) || f20 > 0 || (f13 && f21 > 0);
+}
+
+static int CampAvailability(int ped, int player)
+{
+    if (!g_cfg.campAnywhere)
+        return C_OFF;
+    if (!g_globalsOk)
+        return C_UNSUPPORTED;
+    if (g_kneelOwnCamp > 0)
+        return C_GAME_HAS_IT;
+    if (g_kneelOwnCamp < 0)
+        return C_NO_LIST;
+    if (!CampKit())
+        return C_NO_KIT;
+    // The kneel menu's own conditions for its button, and func_21's that aren't
+    // about the place, in func_21's order. (It runs every frame on its own
+    // thread too, so all of them are cheap.)
+    int campFlags2 = G::Int(G::kCampFlags2, 0);
+    if ((campFlags2 & 1) && !(campFlags2 & (1 << 9)))
+        return C_BLOCKED;
+    if (G::Int(G::kZone, 0) & 4)
+        return C_HIDEOUT;
+    if (N::IsAnimalInteractionRunning(ped))
+        return C_ACTIVITY;
+    if (G::Int(G::kStoryCamp, 0) & (1 << 9))
+        return C_STORY_CAMP;
+    if (N::IsInteriorScene())
+        return C_INTERIOR;
+    if (N::IsPedInCombat(ped))
+        return C_COMBAT;
+    if (LawAfterYou())
+        return C_WANTED;
+    if (N::RecentCrime(player))
+        return C_CRIME;
+    if ((G::Int(G::kAmbush, 0) & 16) || G::Int(G::kEncounter, 0) != 0 || N::IsMinigameInProgress())
+        return C_ACTIVITY;
+    if (G::Int(G::kOnMission, 0) && !(G::Int(G::kMissionCamp, 0) & 1))
+        return C_MISSION;
+    // (func_21 also says no near a spot of this stranger mission while it runs: here, while it runs)
+    if (N::ScriptThreads(H_RCM_EVELYN4) > 0)
+        return C_MISSION;
+    if (G::Int(G::kDistrict, -1) == 8)
+        return C_GUARMA;
+    if (N::ScriptThreads(H_PLAYER_CAMP) > 0 || (G::Int(G::kCampIsUp, 0) & (1 << 23)) ||
+        (G::Int(G::kCampFlags, 0) & G::CAMP_AT_FIRE))
+        return C_CAMP_UP;
+    int area = G::Int(G::kZoneArea, -1);
+    if (area >= 0 && area <= 150 && (G::Int(G::kAreaFlags + 1 + area * 11, 0) & (1 << 25)))
+        return C_LOCKDOWN;
+    // Missions whose camp goes to a spot of its own (the button's func_114(120)
+    // and func_66(15) cases): left to the game.
+    if (FlowUnderWay(G::kCampFlow120) || FlowUnderWay(G::kCampFlow15))
+        return C_STORY_SPOT;
+    // The button's own check before it uses a kit (func_27 -> func_89)
+    if (G::Int(G::kItemUseOff, 0) != 0)
+        return C_ACTIVITY;
+    return C_OK;
+}
+
+static float Dist2(const N::Vec3& a, const N::Vec3& b)
+{
+    float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+// A full camp (with the tent the horse carries) when the active horse is
+// within whistling range and isn't away, or you're leading a horse; otherwise
+// a small one (flags 128 and 32). As the button works it out (func_27, KIT_CAMP).
+static bool FullCamp(int ped)
+{
+    N::Vec3 me = N::EntityCoords(ped);
+    bool nearActive = false;
+    int slot = G::Int(G::kActiveHorse, -1);
+    if (slot >= 0 && slot < 7)
+    {
+        int horse = G::Int(G::kHorsePeds + 1 + slot * 45, 0);
+        float range = WhistleRange(slot);   // -1 for a saved model the game won't take: then 1 m, as the game squares it
+        if (horse && N::DoesEntityExist(horse))
+            nearActive = Dist2(me, N::EntityCoords(horse)) <= range * range;
+    }
+    int led = G::Int(G::kLedHorse, 0);
+    bool nearLed = led && N::DoesEntityExist(led) && Dist2(me, N::EntityCoords(led)) <= 25.0f;
+    return !((!nearActive || G::Int(G::kHorseAway, 0) != 0) && !nearLed);
+}
+
+static void DeleteCampPrompt()
+{
+    if (g_campPrompt)
+    {
+        if (N::PromptIsValid(g_campPrompt))
+            N::PromptDelete(g_campPrompt);
+        g_campPrompt = 0;
+    }
+}
+
+// Built as the kneel menu builds its own Set Up Camp (func_19 -> func_53:
+// priority 1, a tap that fires on press), in its group, with its label.
+static void CreateCampPrompt()
+{
+    int p = N::PromptRegisterBegin();
+    N::PromptSetControlAction(p, H_INPUT_CONTEXT_Y);
+    N::PromptSetText(p, N::DoesTextLabelExist("SET_CAMP") ? "SET_CAMP" : N::VarStringLiteral("Set Up Camp"));
+    N::PromptSetPriority(p, 1);
+    N::PromptSetTransportMode(p, 0);
+    N::PromptSetAttribute(p, 18, 1);
+    N::PromptSetStandardMode(p, 0);
+    N::PromptRegisterEnd(p);
+    N::PromptSetGroup(p, kRestGroup, 0);
+    N::PromptSetVisible(p, 1);
+    N::PromptSetEnabled(p, 1);
+    g_campPrompt = p;
+}
+
+static void StartCamp(int now, int ped)
+{
+    DeletePrompt();
+    DeleteCampPrompt();
+    if (!N::DoesScriptExist("player_camp"))
+    {
+        Log("ERROR: the game has no player_camp script.");
+        HelpText(nullptr, "The camp couldn't be set up.");
+        return;
+    }
+    // player_camp's arguments, as the button passes them: the flags, 0, 0, 0,
+    // 0, 1, and a camp spot that only some missions give (here none).
+    bool full = FullCamp(ped);
+    memset(g_campArgs, 0, sizeof g_campArgs);
+    g_campArgs[0] = full ? 0u : (128u | 32u);
+    g_campArgs[5] = 1;
+    N::RequestScript("player_camp");
+    HideKneelPrompts(g_kneelThread);
+    g_campPhase   = CP_LOADING;
+    g_campPhaseAt = now;
+    Log("Set Up Camp pressed: starting the game's camp (%s, flags %d).",
+        full ? "a full camp, the horse is near" : "a small camp, the horse isn't near", (int)g_campArgs[0]);
+}
+
+static void CampTick(int now, int ped)
+{
+    (void)ped;
+    // The kneel menu's other buttons are held while it's still there (until
+    // player_camp has Arthur up), as its own Set Up Camp takes them away.
+    bool kneelOver = N::ScriptThreads(H_DYNAMIC_CRAFT) <= 0;
+    if (!kneelOver)
+    {
+        N::DisableControlAction(H_INPUT_CONTEXT_X);
+        N::DisableControlAction(H_INPUT_CONTEXT_Y);
+        N::DisableControlAction(H_INPUT_CONTEXT_B);
+        N::DisableControlAction(g_control ? g_control : Joaat("INPUT_CONTEXT_A"));
+        N::DisableControlAction(H_INPUT_JUMP);
+    }
+
+    int age = now - g_campPhaseAt;
+    switch (g_campPhase)
+    {
+    case CP_LOADING:
+        if (N::HasScriptLoaded("player_camp"))
+        {
+            int thread = N::StartScriptWithArgs("player_camp", g_campArgs, 10, 6096);
+            N::ScriptNoLongerNeeded("player_camp");
+            if (thread)
+            {
+                Log("The game's camp script is running.");
+                g_campPhase   = CP_STARTED;
+                g_campPhaseAt = now;
+                g_campState   = 0;
+            }
+            else
+            {
+                Log("ERROR: the game's camp script didn't start.");
+                HelpText(nullptr, "The camp couldn't be set up. Try again.");
+                ShowKneelPrompts(g_kneelThread);
+                g_campPhase = CP_IDLE;
+            }
+        }
+        else if (age > 5000)
+        {
+            N::ScriptNoLongerNeeded("player_camp");
+            Log("ERROR: the game's camp script didn't load within 5 s.");
+            HelpText(nullptr, "The camp couldn't be set up. Try again.");
+            ShowKneelPrompts(g_kneelThread);
+            g_campPhase = CP_IDLE;
+        }
+        break;
+
+    case CP_STARTED:
+    {
+        // player_camp gets Arthur up (its state 1), looks for the nearest
+        // campsite (2) and pitches the camp there (3 on), or gives up with the
+        // game's "Cannot create camp in this location." (14) and ends. Followed
+        // until it's past that, for the log.
+        bool campOver = N::ScriptThreads(H_PLAYER_CAMP) <= 0;
+        int  state    = G::Int(G::kCampState, 0);
+        if (!campOver && state != 0)
+            g_campState = state;
+        if (campOver)
+        {
+            Log("Set Up Camp: the game's camp script ended (last state %d)%s.", g_campState,
+                g_campState == 14 ? ": it found no campsite to use here" : "");
+            if (!kneelOver)
+                ShowKneelPrompts(g_kneelThread);
+            g_campPhase = CP_IDLE;
+        }
+        else if (kneelOver && g_campState >= 3 && g_campState != 14)
+        {
+            Log("Set Up Camp: Arthur is up, the game is pitching the camp (state %d).", g_campState);
+            g_hiddenCount = 0;
+            g_campPhase = CP_IDLE;
+        }
+        else if (age > 10000)
+        {
+            Log("Set Up Camp: %s 10 s on (camp state %d), letting go.",
+                kneelOver ? "the camp isn't up" : "Arthur is still kneeling", g_campState);
+            if (!kneelOver)
+                ShowKneelPrompts(g_kneelThread);
+            g_hiddenCount = 0;
+            g_campPhase = CP_IDLE;
+        }
+        break;
+    }
+    }
+}
+
+static void CampPromptTick(int now, int ped, int player)
+{
+    // The kneel menu's own buttons: its thread is looked up once per kneel (and
+    // again every second if it wasn't found), its prompts every frame, so that
+    // a rebuilt set of them is seen at once.
+    if (g_cfg.campAnywhere)
+    {
+        if (g_kneelOwnCamp == -2 || (!g_kneelThread && now - g_kneelScanAt > 1000))
+        {
+            g_kneelScanAt = now;
+            ScanKneelPrompts();
+        }
+        else if (g_kneelThread)
+        {
+            int own = KneelOwnSetUpCamp(g_kneelThread);
+            if (own != g_kneelOwnCamp)
+            {
+                if (g_cfg.debugLog)
+                    Log("The kneel menu's own buttons now: Set Up Camp %s.",
+                        own > 0 ? "there" : own == 0 ? "left out" : "not found");
+                g_kneelOwnCamp = own;
+            }
+        }
+    }
+    int cr = CampAvailability(ped, player);
+    if (cr != g_lastCampReason)
+    {
+        Log("Set Up Camp: %s.", CampReasonName(cr));
+        g_lastCampReason = cr;
+    }
+    if (cr != C_OK)
+    {
+        DeleteCampPrompt();
+        return;
+    }
+    bool pressed = g_campPrompt && N::PromptIsValid(g_campPrompt) && N::PromptIsJustPressed(g_campPrompt);
+    if (!g_campPrompt || !N::PromptIsValid(g_campPrompt))
+    {
+        g_campPrompt = 0;
+        CreateCampPrompt();
+    }
+    if (pressed)
+        StartCamp(now, ped);
+}
+
+// ===========================================================================
 // The kneel menu watch
 // ===========================================================================
 
@@ -1706,72 +2238,15 @@ static void DropPress(const char* why)
     Log("Fast Travel: dropped the press, the menu didn't open (%s).", why);
 }
 
-static void IdleTick(int now, int ped, int player)
+// The Fast Travel prompt while the kneel menu is up. True once a fast travel
+// request has gone in.
+static bool FtPromptTick(int now, int ped, int player)
 {
-    // A kneel has started (dynamic_craft_scenario runs from its first moment):
-    // load the CAMP text now, so the label is ready by the time the kneel menu
-    // shows its prompts. Let it go again a while after the kneel is over.
-    bool kneeling = g_cfg.enabled && N::ScriptThreads(H_DYNAMIC_CRAFT) > 0 && !N::IsEntityDead(ped);
-    if (kneeling)
+    if (!g_cfg.enabled)
     {
-        g_kneelSeenAt = now;
-        RequestCampText(now);
-    }
-    else
-    {
-        g_kneelHudSeen = false;   // the next kneel starts afresh
-        if (now - g_kneelSeenAt > 3000)
-            ReleaseCampText(now);
-    }
-
-    bool up = kneeling && KneelMenuUp(ped, player);
-    if (up != g_kneelUp)
-    {
-        g_kneelUp = up;
-        g_lastReason = -1;
-        if (up)
-        {
-            if (IniChanged())
-            {
-                LoadSettings();
-                up = g_cfg.enabled && KneelMenuUp(ped, player);
-                g_kneelUp = up;
-            }
-            if (up)
-            {
-                if (!g_globalsOk)
-                {
-                    char why[200];
-                    g_globalsOk = CheckGlobals(ped, why, sizeof why);
-                    if (g_globalsOk)
-                        Log("Script globals look right (game build 1491.50 layout).");
-                    else
-                        Log("ERROR: the game's script globals don't look like build 1491.50 (%s). "
-                            "Fast travel stays off.", why);
-                }
-                LogKneelDetails(ped);
-            }
-        }
-        else
-        {
-            if (g_cfg.debugLog)
-                Log("Kneel menu down.");
-        }
-    }
-    else if (!up && !g_cfg.enabled && now - g_iniCheckAt > 2000)
-    {
-        // Turned off, the kneel never counts as up: look at the .ini now and
-        // then, so Enabled=1 works without restarting the game.
-        g_iniCheckAt = now;
-        if (IniChanged())
-            LoadSettings();
-    }
-
-    if (!up)
-    {
-        DropPress("the kneel menu closed");
+        DropPress("Fast Travel is off");
         DeletePrompt();
-        return;
+        return false;
     }
 
     int r = Availability(ped, player);
@@ -1798,7 +2273,7 @@ static void IdleTick(int now, int ped, int player)
             Log("Ready %.1f s after the press: opening the fast travel menu.", (now - g_pressAt) / 1000.0);
             g_pressAt = -1;
             StartRequest(now);
-            return;
+            return true;
         }
         else if (now - g_pressAt > 3000)
             DropPress("Arthur wasn't all the way down 3 s later");
@@ -1807,7 +2282,7 @@ static void IdleTick(int now, int ped, int player)
     if (r != R_OK && !g_cfg.showWhenUnavailable)
     {
         DeletePrompt();
-        return;
+        return false;
     }
 
     // The press, read before the prompt might be replaced below.
@@ -1838,6 +2313,7 @@ static void IdleTick(int now, int ped, int player)
             {
                 g_pressAt = -1;
                 StartRequest(now);
+                return true;
             }
             else if (!FullyKneeling(ped))
                 Log("Fast Travel pressed while Arthur is still getting down: the menu opens once he's down.");
@@ -1852,6 +2328,93 @@ static void IdleTick(int now, int ped, int player)
         g_lastHelpWhy = r;
         ShowReason(r);
     }
+    return false;
+}
+
+static void IdleTick(int now, int ped, int player)
+{
+    // The settings file, every 2 s (and at once when a kneel starts): changes
+    // apply without a restart. The prompts are made again with them.
+    if (now - g_iniCheckAt > 2000)
+    {
+        g_iniCheckAt = now;
+        if (IniChanged())
+        {
+            LoadSettings();
+            DeletePrompt();
+            DeleteCampPrompt();
+            g_lastReason = g_lastCampReason = -1;
+        }
+    }
+
+    // A kneel has started (dynamic_craft_scenario runs from its first moment):
+    // load the CAMP text now, so the label is ready by the time the kneel menu
+    // shows its prompts. Let it go again a while after the kneel is over.
+    bool watching = g_cfg.enabled || g_cfg.campAnywhere;
+    bool kneeling = watching && N::ScriptThreads(H_DYNAMIC_CRAFT) > 0 && !N::IsEntityDead(ped);
+    if (kneeling)
+    {
+        g_kneelSeenAt = now;
+        if (g_cfg.enabled)
+            RequestCampText(now);
+    }
+    else
+    {
+        g_kneelHudSeen = false;   // the next kneel starts afresh
+        if (now - g_kneelSeenAt > 3000)
+            ReleaseCampText(now);
+    }
+
+    bool up = kneeling && KneelMenuUp(ped, player);
+    if (up != g_kneelUp)
+    {
+        g_kneelUp = up;
+        g_lastReason = g_lastCampReason = -1;
+        g_kneelOwnCamp = -2;   // the kneel menu's own buttons are looked at afresh
+        if (up)
+        {
+            if (IniChanged())
+            {
+                LoadSettings();
+                g_iniCheckAt = now;
+                up = (g_cfg.enabled || g_cfg.campAnywhere) && KneelMenuUp(ped, player);
+                g_kneelUp = up;
+            }
+            if (up)
+            {
+                if (!g_globalsOk)
+                {
+                    char why[200];
+                    g_globalsOk = CheckGlobals(ped, why, sizeof why);
+                    if (g_globalsOk)
+                        Log("Script globals look right (game build 1491.50 layout).");
+                    else
+                        Log("ERROR: the game's script globals don't look like build 1491.50 (%s). "
+                            "Fast travel stays off.", why);
+                }
+                LogKneelDetails(ped);
+            }
+        }
+        else
+        {
+            if (g_cfg.debugLog)
+                Log("Kneel menu down.");
+        }
+    }
+
+    if (!up)
+    {
+        DropPress("the kneel menu closed");
+        DeletePrompt();
+        DeleteCampPrompt();
+        return;
+    }
+
+    if (FtPromptTick(now, ped, player))
+        return;
+    CampPromptTick(now, ped, player);
+    if (g_campPhase != CP_IDLE)
+        DropPress("Set Up Camp was pressed");
 }
 
 // ===========================================================================
@@ -1886,6 +2449,8 @@ static void ScriptMain()
                 g_campTextOurs = false;   // Red Dead Online has its own camps: leave the text to it
                 g_campTextAskedAt = -1;
                 g_campTextSeen = false;
+                DeleteCampPrompt();
+                g_campPhase = CP_IDLE;
             }
         }
 
@@ -1902,14 +2467,18 @@ static void ScriptMain()
                     Notify(9000, true, "%s %s: your Script Hook RDR2 has no getGlobalPtr - see FastTravelAnywhere.log",
                            FTA_NAME, FTA_VERSION);
                 else if (g_cfg.showLoadMessage)
-                    Notify(6000, false, g_cfg.enabled
-                           ? "%s %s loaded - hold E to kneel, then Space: Fast Travel"
-                           : "%s %s loaded - OFF (Enabled=0 in FastTravelAnywhere.ini)",
+                    Notify(6000, false,
+                           g_cfg.enabled && g_cfg.campAnywhere ? "%s %s loaded - hold E to kneel: Space to Fast Travel, E to Set Up Camp anywhere" :
+                           g_cfg.enabled ? "%s %s loaded - hold E to kneel, then Space: Fast Travel" :
+                           g_cfg.campAnywhere ? "%s %s loaded - hold E to kneel, then E: Set Up Camp anywhere" :
+                                                "%s %s loaded - OFF (Enabled=0 and SetUpCampAnywhere=0 in FastTravelAnywhere.ini)",
                            FTA_NAME, FTA_VERSION);
             }
 
             if (g_phase != PH_IDLE)
                 FlowTick(now, ped);
+            else if (g_campPhase != CP_IDLE)
+                CampTick(now, ped);
             else if (!N::IsPauseMenuActive())
                 IdleTick(now, ped, player);
         }

@@ -15,6 +15,10 @@
 // request after a few frames, unloaded by the camp scripts and the Craft menu
 // when they end, gone after a trip (as players found in the game); a prompt
 // whose label isn't loaded shows no text.
+// For Set Up Camp: the kneel menu's own prompts in the scripts' shared prompt
+// list (Global_1945188), its own Set Up Camp only where the game allows a camp,
+// the script threads, launching player_camp, and player_camp itself (it gets
+// Arthur up, then pitches camp or gives up when it finds no campsite).
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -60,6 +64,7 @@ enum
     GL_UIBUSY = 1898068, GL_UIBUSY4 = 1898072, GL_ACTIVE_HORSE = 1135, GL_HORSE_SAVES = 1136,
     GL_HORSE_PEDS = 1900383, GL_LODGING = 4644, GL_SESSION = 1572899, GL_UNLOCK_FLOW = 1351050,
     GL_FLOW_STATUS = 12106, GL_KNEEL_HUD = 1955831, GL_MENU_STOP_A = 1357517, GL_MENU_STOP_B = 1935690,
+    GL_PROMPT_LIST = 1945188, GL_CAMP_IS_UP = 9459, GL_CAMP_STATE = 43885,
 };
 
 // ---------------------------------------------------------------------------
@@ -142,6 +147,25 @@ struct Sim
     int   french;                      // the game's language
     int   labelUnreadable;             // _GET_LABEL_TEXT_2 can't read CAMP_FT_PROMPT
     int   blankFrames, blankTotal;     // frames the kneel menu showed our prompt without any text
+    // Set Up Camp
+    int   campHere;                    // the game allows a camp here: the kneel menu has its own Set Up Camp
+    int   listBroken;                  // the kneel's prompts aren't in the shared prompt list (another layout)
+    int   kneelPrompts[3];             // the kneel menu's own prompts (Craft, Set Up Camp, Leave), 0 = none
+    int   kitCamp, kitSimple, backupInv;
+    int   interior, combat, recentCrime, minigame, animalInteraction;
+    int   campScriptExists, campScriptNoLoad, campScriptLoadIn, campScriptLoaded;
+    int   scriptRequests, noLongerNeeded, badScriptCalls, badInventory;
+    int   campStarts, campArgc, campStack;
+    uint64_t campArgs[10];
+    int   campRunning, campFrames, campFails;   // the fake player_camp
+    int   threadIter;                  // SCRIPT_THREAD_ITERATOR position
+    int   disabledB, disabledA;
+    int   gameCampStarts;              // camps the kneel menu's own Set Up Camp started
+    int   campKneelExits;              // times player_camp got Arthur up from the kneel
+    int   campStateAt;                 // the fake player_camp's frame count when it changed state
+    int   evelyn;                      // RCM_EVELYN_MILLER4 running
+    int   dupFrames;                   // frames the drawn kneel menu had two Set Up Camps
+    int   campPromptsMax;              // most Set Up Camp prompts of the plugin's at once
 };
 static Sim g_sim;
 
@@ -163,7 +187,8 @@ struct Prompt
     uint32_t control;
     char     text[128];
     int      priority, transport, standard, release, attr18, group, tab, enabled, visible;
-    int      justReleased;
+    int      justReleased, justPressed;
+    int      game;                     // made by the game's own scripts (here the kneel), not by the plugin
 };
 static Prompt g_prompts[64];
 static int    g_promptNext = 1000;
@@ -178,11 +203,23 @@ static Prompt* FindPrompt(int id)
     return nullptr;
 }
 
-static int LivePrompts()
+static int LivePrompts()   // the plugin's
 {
     int n = 0;
     for (int i = 0; i < 64; i++)
-        if (g_prompts[i].id && g_prompts[i].valid)
+        if (g_prompts[i].id && g_prompts[i].valid && !g_prompts[i].game)
+            n++;
+    return n;
+}
+
+// The plugin's prompts: Fast Travel is a tap on release, its Set Up Camp a tap on press.
+static bool IsCampPrompt(const Prompt& p) { return p.id && p.valid && !p.game && p.standard && !p.release; }
+
+static int GamePrompts()
+{
+    int n = 0;
+    for (int i = 0; i < 64; i++)
+        if (g_prompts[i].id && g_prompts[i].valid && g_prompts[i].game)
             n++;
     return n;
 }
@@ -215,12 +252,25 @@ static const Label kCampLabels[] =
     { "NO_REGION_FT",   "Discover more regions to use fast travel. Regions in lockdown are unavailable.", "Decouvrez d'autres regions." },
 };
 
+// Labels of the game's always-loaded text the kneel menu uses.
+static const Label kGlobalLabels[] =
+{
+    { "SET_CAMP", "Set Up Camp", "Installer le camp" },
+    { "CAMP_CRAFT", "Craft", "Fabriquer" },
+    { "LEAVE", "Leave", "Partir" },
+};
+
 static bool IsCampBlock(const char* s) { return s && strcmp(s, "CAMP") == 0; }
 
 // The label's text, if the label is loaded right now.
 static const char* LabelText(const char* name)
 {
-    if (!name || !g_sim.campLoaded)
+    if (!name)
+        return nullptr;
+    for (const Label& l : kGlobalLabels)
+        if (strcmp(l.name, name) == 0)
+            return g_sim.french ? l.fr : l.en;
+    if (!g_sim.campLoaded)
         return nullptr;
     for (const Label& l : kCampLabels)
         if (strcmp(l.name, name) == 0)
@@ -363,6 +413,101 @@ static bool HorseInRange(int h, int slot)
     return sqrtf(dx * dx + dy * dy) <= SimWhistleRange(slot);
 }
 
+// The game's script threads, as SCRIPT_THREAD_ITERATOR_* hands them out.
+static const int kKneelThread = 7001, kCampThread = 7003;
+static int ThreadList(int* ids, uint32_t* hashes)
+{
+    int n = 0;
+    auto add = [&](int id, const char* name) { ids[n] = id; hashes[n] = Joaat(name); n++; };
+    add(7100, "main");
+    if (g_sim.kneel != K_OFF) add(kKneelThread, "dynamic_craft_scenario");
+    add(7101, "long_update");
+    if (g_sim.suRunning) add(7002, "short_update");
+    if (g_sim.campRunning || (g_sim.scripts & 1)) add(kCampThread, "player_camp");
+    for (int i = 1; i < (int)(sizeof kCampScripts / sizeof kCampScripts[0]); i++)
+        if ((g_sim.scripts >> i) & 1) add(7010 + i, kCampScripts[i].name);
+    if (g_sim.simpleCrafting) add(7020, "simple_crafting");
+    if (g_sim.evelyn) add(7030, "rcm_evelyn_miller4");
+    return n;
+}
+
+static bool StrIs(uint64_t arg, const char* want)
+{
+    const char* s = (const char*)(uintptr_t)arg;
+    return s && strcmp(s, want) == 0;
+}
+
+// The kneel menu's own prompts (dynamic_craft_scenario func_19 -> func_53),
+// in the game's shared prompt list (Global_1945188, slots of 18).
+static void KneelUnlistPrompts();
+static void KneelRemovePrompts()
+{
+    for (int i = 0; i < 3; i++)
+    {
+        if (Prompt* p = FindPrompt(g_sim.kneelPrompts[i]))
+            memset(p, 0, sizeof(Prompt));
+        g_sim.kneelPrompts[i] = 0;
+    }
+    KneelUnlistPrompts();
+}
+
+// Their slots in the shared list (func_53): f_1 bit 2 in use (and 128), f_3 the
+// prompt, f_4 its control, f_16 the thread. The game's helper never uses slot 0.
+static void KneelListPrompts()
+{
+    for (int i = 0; i < 3; i++)
+    {
+        Prompt* p = FindPrompt(g_sim.kneelPrompts[i]);
+        if (!p)
+            continue;
+        int base = GL_PROMPT_LIST + 1 + (i + 1) * 18;
+        SI(base + 0, 1);
+        SI(base + 1, 2 | 128);
+        SI(base + 3, p->id);
+        SI(base + 4, (int)p->control);
+        SI(base + 16, kKneelThread);
+    }
+}
+
+static void KneelUnlistPrompts()
+{
+    for (int i = 0; i < 3; i++)
+    {
+        int base = GL_PROMPT_LIST + 1 + (i + 1) * 18;
+        SI(base + 1, 0);
+        SI(base + 4, 0);
+        SI(base + 16, 0);
+    }
+}
+
+static void KneelAddPrompts()
+{
+    KneelRemovePrompts();
+    static const char* const labels[3] = { "CAMP_CRAFT", "SET_CAMP", "LEAVE" };
+    const uint32_t controls[3] = { Joaat("INPUT_CONTEXT_X"), Joaat("INPUT_CONTEXT_Y"), Joaat("INPUT_CONTEXT_B") };
+    for (int i = 0; i < 3; i++)
+    {
+        if (i == 1 && (!g_sim.campHere || !(g_sim.kitCamp || g_sim.kitSimple)))
+            continue;                      // func_21 said no, or no camp kit: no Set Up Camp
+        int slot = -1;
+        for (int k = 0; k < 64; k++) if (!g_prompts[k].id) { slot = k; break; }
+        if (slot < 0)
+            return;
+        Prompt& p = g_prompts[slot];
+        memset(&p, 0, sizeof p);
+        p.id = g_promptNext++;
+        p.valid = p.enabled = p.visible = p.standard = 1;
+        p.game = 1;
+        p.control = controls[i];
+        p.group = 342152817;
+        p.priority = 1;
+        snprintf(p.text, sizeof p.text, "%s", labels[i]);
+        g_sim.kneelPrompts[i] = p.id;
+    }
+    if (!g_sim.listBroken)
+        KneelListPrompts();
+}
+
 uint64_t* FS_nativeCall()
 {
     memset(g_result, 0, sizeof g_result);
@@ -411,11 +556,14 @@ uint64_t* FS_nativeCall()
         else if (h == H("CAMERA_ITEM")) n = g_sim.cameraItem;
         else if (h == H("SIMPLE_CRAFTING")) n = g_sim.simpleCrafting;
         else if (h == H("DOC_PLAYER_JOURNAL")) n = g_sim.journal;
+        else if (h == H("RCM_EVELYN_MILLER4")) n = g_sim.evelyn;
         else
         {
             for (int i = 0; i < (int)(sizeof kCampScripts / sizeof kCampScripts[0]); i++)
                 if (h == H(kCampScripts[i].name))
                     n = (g_sim.scripts >> i) & 1;
+            if (h == H("player_camp") && g_sim.campRunning)
+                n = 1;
         }
         g_result[0] = (uint32_t)n;
         break;
@@ -433,7 +581,78 @@ uint64_t* FS_nativeCall()
         break;
     }
 
+    // ---- script threads and launching ----
+    case 0x39382EB8DCD8684DULL: Want(0); g_sim.threadIter = 0; break;                        // SCRIPT_THREAD_ITERATOR_RESET
+    case 0x3CE3FB167E837D7CULL: {                                                         // SCRIPT_THREAD_ITERATOR_GET_NEXT_THREAD_ID
+        Want(0);
+        int ids[32]; uint32_t hs[32];
+        int n = ThreadList(ids, hs);
+        g_result[0] = g_sim.threadIter < n ? (uint32_t)ids[g_sim.threadIter++] : 0;
+        break;
+    }
+    case 0x724CB89D35B283D0ULL: {                                                         // _GET_HASH_OF_THREAD
+        Want(1);
+        int ids[32]; uint32_t hs[32];
+        int n = ThreadList(ids, hs);
+        for (int i = 0; i < n; i++)
+            if (ids[i] == I(0))
+                g_result[0] = hs[i];
+        break;
+    }
+    case 0x552B171E3F69E5AEULL: Want(1); g_result[0] = StrIs(g_args[0], "player_camp") && g_sim.campScriptExists; break; // DOES_SCRIPT_EXIST
+    case 0x46ED607DDD40D7FEULL:                                                           // REQUEST_SCRIPT
+        Want(1);
+        if (!StrIs(g_args[0], "player_camp")) { g_sim.badScriptCalls++; break; }
+        g_sim.scriptRequests++;
+        if (!g_sim.campScriptLoaded && !g_sim.campScriptLoadIn && !g_sim.campScriptNoLoad)
+            g_sim.campScriptLoadIn = 3;
+        break;
+    case 0xE97BD36574F8B0A6ULL: Want(1); g_result[0] = StrIs(g_args[0], "player_camp") && g_sim.campScriptLoaded; break; // HAS_SCRIPT_LOADED
+    case 0x0086D3067E1CFD1CULL:                                                           // SET_SCRIPT_AS_NO_LONGER_NEEDED
+        Want(1);
+        if (StrIs(g_args[0], "player_camp")) { g_sim.noLongerNeeded++; g_sim.campScriptLoaded = 0; g_sim.campScriptLoadIn = 0; }
+        else g_sim.badScriptCalls++;
+        break;
+    case 0xB8BA7F44DF1575E1ULL: {                                                         // START_NEW_SCRIPT_WITH_ARGS
+        Want(4);
+        if (!StrIs(g_args[0], "player_camp") || !g_sim.campScriptLoaded || I(2) != 10 || !g_args[1])
+        {
+            g_sim.badScriptCalls++;
+            break;
+        }
+        uint64_t* a = (uint64_t*)(uintptr_t)g_args[1];
+        for (int i = 0; i < 10; i++)
+            g_sim.campArgs[i] = a[i];
+        g_sim.campStarts++;
+        g_sim.campArgc = I(2);
+        g_sim.campStack = I(3);
+        g_sim.campRunning = 1;
+        g_sim.campFrames = 0;
+        SI(GL_CAMP_STATE, 0);
+        g_result[0] = (uint32_t)kCampThread;
+        break;
+    }
+
+    // ---- the camp kit ----
+    case 0x6D5D51B188333FD1ULL: Want(2); g_result[0] = (uint32_t)g_args[0] == H("KIT_CAMP") || (uint32_t)g_args[0] == H("KIT_CAMP_SIMPLE"); break; // _ITEMDATABASE_IS_KEY_VALID
+    case 0x7C7E4AB748EA3B07ULL: Want(0); g_result[0] = g_sim.backupInv; break;               // _INVENTORY_IS_USING_BACKUP_INVENTORY
+    case 0xE787F05DFC977BDEULL: {                                                         // _INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID
+        Want(3);
+        uint32_t item = (uint32_t)g_args[1];
+        if (I(0) != (g_sim.backupInv ? 5 : 1)) { g_sim.badInventory++; break; }
+        g_result[0] = (uint32_t)(item == H("KIT_CAMP") ? g_sim.kitCamp : item == H("KIT_CAMP_SIMPLE") ? g_sim.kitSimple : 0);
+        break;
+    }
+
+    // ---- the game's other camping rules ----
+    case 0x4200F14D6F840A9AULL: Want(0); g_result[0] = g_sim.interior; break;                 // IS_INTERIOR_SCENE
+    case 0x4859F1FC66A6278EULL: Want(2); g_result[0] = I(0) == kPlayerPed && g_sim.combat; break; // IS_PED_IN_COMBAT
+    case 0x26934083D3F2579CULL: Want(1); g_result[0] = g_sim.recentCrime; break;              // LAW: recently committed a crime
+    case 0xF4D8BCD052E7EA1BULL: Want(0); g_result[0] = g_sim.minigame; break;                 // IS_MINIGAME_IN_PROGRESS
+    case 0x7FC84E85D98F063DULL: Want(1); g_result[0] = g_sim.animalInteraction; break;        // _IS_ANIMAL_INTERACTION_RUNNING
+
     // ---- prompts ----
+    case 0x2787CC611D3FACC5ULL: { Want(1); Prompt* p = FindPrompt(I(0)); g_result[0] = p && p->justPressed; break; } // _UI_PROMPT_IS_JUST_PRESSED
     case 0x04F97DE45A519419ULL: {                                                         // _UI_PROMPT_REGISTER_BEGIN
         Want(0);
         int slot = -1;
@@ -533,6 +752,8 @@ uint64_t* FS_nativeCall()
         uint32_t h = (uint32_t)g_args[1];
         if (h == H("INPUT_CONTEXT_X")) g_sim.disabledX = 1;
         else if (h == H("INPUT_CONTEXT_Y")) g_sim.disabledY = 1;
+        else if (h == H("INPUT_CONTEXT_B")) g_sim.disabledB = 1;
+        else if (h == H("INPUT_CONTEXT_A")) g_sim.disabledA = 1;
         else if (h == H("INPUT_JUMP")) g_sim.disabledJump = 1;
         else g_sim.disabledOther = 1;
         break;
@@ -721,6 +942,63 @@ static void ShortUpdateTick()
     SI(GL_FT_FLAGS, fl);
 }
 
+// player_camp, reduced to what the plugin sees (its state in Global_43885):
+//   1  loads the CAMP text, gets Arthur up from the kneel (DYNAMIC_KNEEL_SLOW_EXIT
+//      and CLEAR_PED_TASKS) and waits until he's out of it;
+//   2  looks for the nearest campsite: found -> 3, none -> 14 ("Cannot create
+//      camp in this location.") and it ends a moment later;
+//   3  pitches the camp: up (9) after a while, with bit 23 of Global_40.f_9419,
+//      and of Global_1392040 while you're by the fire.
+// Its cleanup (func_4) sets Global_43885 back to 0 and unloads the CAMP text.
+static void PlayerCampEnd()
+{
+    g_sim.campRunning = 0;
+    SI(GL_CAMP_STATE, 0);
+    SI(GL_CAMP_IS_UP, GI(GL_CAMP_IS_UP) & ~(1 << 23));
+    SI(GL_CAMP, GI(GL_CAMP) & ~(1 << 23));
+    CampDelete();
+}
+
+static void PlayerCampTick()
+{
+    if (!g_sim.campRunning)
+        return;
+    int f = ++g_sim.campFrames;
+    switch (GI(GL_CAMP_STATE))
+    {
+    case 0:
+        CampRequest();
+        SI(GL_CAMP_STATE, 1);
+        break;
+    case 1:
+        if (g_sim.kneel == K_DOWN || g_sim.kneel == K_KNEEL)
+        {
+            g_sim.kneel = K_EXIT;
+            g_sim.kneelFrames = 10;
+            g_sim.campKneelExits++;
+        }
+        else if (g_sim.kneel == K_OFF)
+            SI(GL_CAMP_STATE, 2);
+        break;
+    case 2:
+        SI(GL_CAMP_STATE, g_sim.campFails ? 14 : 3);
+        g_sim.campStateAt = f;
+        break;
+    case 3:
+        if (f - g_sim.campStateAt >= 20)
+        {
+            SI(GL_CAMP_STATE, 9);
+            SI(GL_CAMP_IS_UP, GI(GL_CAMP_IS_UP) | (1 << 23));
+            SI(GL_CAMP, GI(GL_CAMP) | (1 << 23));
+        }
+        break;
+    case 14:
+        if (f - g_sim.campStateAt >= 3)
+            PlayerCampEnd();
+        break;
+    }
+}
+
 extern "C" __declspec(dllexport) void FakeGameTick()
 {
     g_sim.gameMs += 33;
@@ -753,7 +1031,10 @@ extern "C" __declspec(dllexport) void FakeGameTick()
     if (g_sim.kneel == K_OFF)
     {
         if (g_sim.dcState != 0)
+        {
             hud &= ~4;                                      // its cleanup (func_7)
+            KneelRemovePrompts();
+        }
         g_sim.dcState = 0;
         g_sim.setCamp = 0;
     }
@@ -765,22 +1046,28 @@ extern "C" __declspec(dllexport) void FakeGameTick()
             !g_sim.playerDead && !menuUp)
         {
             g_sim.dcState = 2;
+            KneelAddPrompts();
             if (!g_sim.hudBroken)
                 hud = (hud | 4) & ~8;
         }
         else if (g_sim.dcState == 2)
         {
             if (g_sim.interactionTarget || g_sim.cameraItem)
+            {
                 g_sim.dcState = 1;                          // bit 2 left as it is
+                KneelRemovePrompts();
+            }
             else if (menuUp)
             {
                 g_sim.dcState = 3;
                 hud &= ~4;
+                KneelRemovePrompts();
             }
             else if (g_sim.setCamp == 1)
             {
                 g_sim.setCamp = 2;
                 hud &= ~4;
+                KneelRemovePrompts();
             }
         }
         else if (g_sim.dcState == 3 && !menuUp)
@@ -795,11 +1082,23 @@ extern "C" __declspec(dllexport) void FakeGameTick()
     for (int i = 0; i < 64; i++)
     {
         Prompt& p = g_prompts[i];
-        if (p.id && p.valid && p.visible && p.group == 342152817 && g_sim.groupDrawn && !ShownText(p.text)[0])
+        if (p.id && p.valid && !p.game && p.visible && p.group == 342152817 && g_sim.groupDrawn && !ShownText(p.text)[0])
         {
             g_sim.blankFrames++;
             g_sim.blankTotal++;
         }
+    }
+
+    // never two Set Up Camps in the drawn kneel menu, never two of the plugin's
+    {
+        int ours = 0;
+        for (int i = 0; i < 64; i++)
+            if (IsCampPrompt(g_prompts[i]))
+                ours++;
+        if (ours > g_sim.campPromptsMax)
+            g_sim.campPromptsMax = ours;
+        if (g_sim.groupDrawn && ours > 0 && FindPrompt(g_sim.kneelPrompts[1]))
+            g_sim.dupFrames++;
     }
 
     // input: a press queued by the test is released this frame
@@ -809,15 +1108,29 @@ extern "C" __declspec(dllexport) void FakeGameTick()
     {
         Prompt& p = g_prompts[i];
         p.justReleased = 0;
+        p.justPressed = 0;
         if (!p.id || !p.valid || !p.enabled || !p.visible || g_sim.pressedNow == 0 || p.control != g_sim.pressedNow)
             continue;
         bool shown = p.group == 0 || (p.group == 342152817 && g_sim.groupDrawn);
         if (shown && p.standard && p.release)
             p.justReleased = 1;
+        if (shown && p.standard && !p.release)
+            p.justPressed = 1;
     }
+    // the kneel menu's own Set Up Camp pressed (func_25 -> func_27): it starts
+    // player_camp and takes its prompts down (next frame here)
+    if (g_sim.dcState == 2 && g_sim.setCamp == 0)
+        if (Prompt* own = FindPrompt(g_sim.kneelPrompts[1]))
+            if (own->justPressed)
+            {
+                g_sim.setCamp = 1;
+                g_sim.gameCampStarts++;
+                if (!g_sim.campRunning) { g_sim.campRunning = 1; g_sim.campFrames = 0; SI(GL_CAMP_STATE, 0); }
+            }
 
     // per-frame control disables are cleared each frame, as in the game
     g_sim.disabledX = g_sim.disabledY = g_sim.disabledJump = g_sim.disabledAll = g_sim.disabledOther = 0;
+    g_sim.disabledB = g_sim.disabledA = 0;
 
     // the control context lasts the frame it's set for
     g_sim.ctxFrontendLast = g_sim.ctxFrontend;
@@ -838,6 +1151,11 @@ extern "C" __declspec(dllexport) void FakeGameTick()
     else
         g_sim.moveFrames = 0;
 
+    // REQUEST_SCRIPT("player_camp") finishes after a few frames
+    if (g_sim.campScriptLoadIn > 0 && --g_sim.campScriptLoadIn == 0)
+        g_sim.campScriptLoaded = 1;
+
+    PlayerCampTick();
     ShortUpdateTick();
 }
 
@@ -855,6 +1173,9 @@ enum SetWhat
     S_MENU_SHOWS, S_MOVE, S_NO_SCENARIO_TASK, S_STUCK_TRAVEL,
     S_DOWN_FRAMES, S_CAMP_LOADED, S_CAMP_LOAD_FRAMES, S_CAMP_NEVER, S_CAMP_SCRIPT, S_FRENCH, S_CRAFTING,
     S_SET_CAMP, S_CAMPFIRE_HUD, S_HUD_BROKEN, S_NOT_ACTIVE, S_LABEL_UNREADABLE,
+    S_CAMP_HERE, S_LIST_BROKEN, S_KIT_CAMP, S_KIT_SIMPLE, S_BACKUP_INV, S_INTERIOR, S_COMBAT, S_RECENT_CRIME,
+    S_MINIGAME, S_ANIMAL_INTERACTION, S_CAMP_SCRIPT_EXISTS, S_CAMP_SCRIPT_NO_LOAD, S_CAMP_FAILS, S_CAMP_DOWN,
+    S_EVELYN,
 };
 
 extern "C" __declspec(dllexport) void FakeSet(int what, int v)
@@ -885,6 +1206,24 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
     case S_HUD_BROKEN:    g_sim.hudBroken = v; if (v) SI(GL_KNEEL_HUD, 0); break;
     case S_NOT_ACTIVE:    g_sim.notActive = v; break;
     case S_LABEL_UNREADABLE: g_sim.labelUnreadable = v; break;
+    case S_CAMP_HERE:     g_sim.campHere = v; break;          // the game allows a camp where he kneels
+    case S_LIST_BROKEN:   // the kneel's prompts not in the list (another layout) / found there after all
+        g_sim.listBroken = v;
+        if (v) KneelUnlistPrompts(); else KneelListPrompts();
+        break;
+    case S_KIT_CAMP:      g_sim.kitCamp = v; break;
+    case S_KIT_SIMPLE:    g_sim.kitSimple = v; break;
+    case S_BACKUP_INV:    g_sim.backupInv = v; break;
+    case S_INTERIOR:      g_sim.interior = v; break;
+    case S_COMBAT:        g_sim.combat = v; break;
+    case S_RECENT_CRIME:  g_sim.recentCrime = v; break;
+    case S_MINIGAME:      g_sim.minigame = v; break;
+    case S_ANIMAL_INTERACTION: g_sim.animalInteraction = v; break;
+    case S_CAMP_SCRIPT_EXISTS: g_sim.campScriptExists = v; break;
+    case S_CAMP_SCRIPT_NO_LOAD: g_sim.campScriptNoLoad = v; break;
+    case S_CAMP_FAILS:    g_sim.campFails = v; break;
+    case S_CAMP_DOWN:     if (g_sim.campRunning) PlayerCampEnd(); break;   // the camp is packed up
+    case S_EVELYN:        g_sim.evelyn = v; break;
     case S_CRAFTING:
         // the kneel menu's Craft: simple_crafting loads the CAMP text when it
         // starts (its func_30) and unloads it when it ends
@@ -921,6 +1260,10 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
         g_sim.modFadeIns = g_sim.modFadeOuts = g_sim.clearTasks = g_sim.kneelExitCmds = 0;
         g_sim.music = g_sim.musicStop = g_sim.menuOpens = g_sim.modMusicStops = 0;
         g_sim.blankFrames = 0;
+        g_sim.campStarts = g_sim.gameCampStarts = g_sim.scriptRequests = g_sim.noLongerNeeded = 0;
+        g_sim.campKneelExits = 0;
+        g_sim.campArgc = g_sim.campStack = 0;
+        memset(g_sim.campArgs, 0, sizeof g_sim.campArgs);
         g_helpCount = 0;
         break;
     }
@@ -936,14 +1279,37 @@ enum GetWhat
     Q_BAD_HELP, Q_PLAYER_X, Q_PLAYER_Y, Q_TIMESCALE_X10, Q_GAME_MS, Q_LAST_UNKNOWN_LO, Q_LAST_BADARG_LO,
     Q_DISABLED_OTHER, Q_CONTEXT_SETS, Q_PAUSE_ENABLED, Q_MOD_MUSIC_STOPS, Q_PCF_100, Q_PCF_101,
     Q_GROUP_DRAWN, Q_CAMP_LOADED, Q_CAMP_REQUESTS, Q_CAMP_DELETES, Q_BLANK_FRAMES, Q_BLANK_TOTAL,
+    Q_FT_PROMPTS, Q_CAMP_PROMPTS, Q_CP_CONTROL, Q_CP_PRIORITY, Q_CP_TRANSPORT, Q_CP_STANDARD, Q_CP_RELEASE,
+    Q_CP_ATTR18, Q_CP_GROUP, Q_CP_TAB, Q_CP_ENABLED, Q_CP_VISIBLE, Q_GAME_PROMPTS, Q_KNEEL_OWN_CAMP,
+    Q_CAMP_STARTS, Q_GAME_CAMP_STARTS, Q_CAMP_ARGC, Q_CAMP_STACK, Q_CAMP_RUNNING, Q_SCRIPT_REQUESTS,
+    Q_NO_LONGER_NEEDED, Q_BAD_SCRIPT_CALLS, Q_BAD_INVENTORY, Q_DISABLED_B, Q_DISABLED_A, Q_CAMP_KNEEL_EXITS,
+    Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS,
+    Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 
-static Prompt* CurrentPrompt()
+static Prompt* CurrentPrompt()   // Fast Travel
 {
     for (int i = 0; i < 64; i++)
-        if (g_prompts[i].id && g_prompts[i].valid)
+        if (g_prompts[i].id && g_prompts[i].valid && !g_prompts[i].game && !IsCampPrompt(g_prompts[i]))
             return &g_prompts[i];
     return nullptr;
+}
+
+static Prompt* CampPrompt()
+{
+    for (int i = 0; i < 64; i++)
+        if (IsCampPrompt(g_prompts[i]))
+            return &g_prompts[i];
+    return nullptr;
+}
+
+static int CountPrompts(bool camp)
+{
+    int n = 0;
+    for (int i = 0; i < 64; i++)
+        if (g_prompts[i].id && g_prompts[i].valid && !g_prompts[i].game && IsCampPrompt(g_prompts[i]) == camp)
+            n++;
+    return n;
 }
 
 extern "C" __declspec(dllexport) int FakeGet(int what)
@@ -1005,6 +1371,55 @@ extern "C" __declspec(dllexport) int FakeGet(int what)
     case Q_CAMP_DELETES:    return g_sim.campDeletes;
     case Q_BLANK_FRAMES:    return g_sim.blankFrames;
     case Q_BLANK_TOTAL:     return g_sim.blankTotal;
+    case Q_FT_PROMPTS:      return CountPrompts(false);
+    case Q_CAMP_PROMPTS:    return CountPrompts(true);
+    case Q_GAME_PROMPTS:    return GamePrompts();
+    case Q_KNEEL_OWN_CAMP:  return FindPrompt(g_sim.kneelPrompts[1]) != nullptr;
+    case Q_CAMP_STARTS:     return g_sim.campStarts;
+    case Q_GAME_CAMP_STARTS: return g_sim.gameCampStarts;
+    case Q_CAMP_ARGC:       return g_sim.campArgc;
+    case Q_CAMP_STACK:      return g_sim.campStack;
+    case Q_CAMP_RUNNING:    return g_sim.campRunning;
+    case Q_SCRIPT_REQUESTS: return g_sim.scriptRequests;
+    case Q_NO_LONGER_NEEDED: return g_sim.noLongerNeeded;
+    case Q_BAD_SCRIPT_CALLS: return g_sim.badScriptCalls;
+    case Q_BAD_INVENTORY:   return g_sim.badInventory;
+    case Q_DISABLED_B:      return g_sim.disabledB;
+    case Q_DISABLED_A:      return g_sim.disabledA;
+    case Q_CAMP_KNEEL_EXITS: return g_sim.campKneelExits;
+    case Q_DUP_FRAMES:      return g_sim.dupFrames;
+    case Q_CAMP_PROMPTS_MAX: return g_sim.campPromptsMax;
+    case Q_CAMP_STATE:      return GI(GL_CAMP_STATE);
+    case Q_KNEEL_VISIBLE:
+    case Q_KNEEL_PROMPTS:
+    {
+        int n = 0;
+        for (int i = 0; i < 3; i++)
+            if (Prompt* k = FindPrompt(g_sim.kneelPrompts[i]))
+                n += what == Q_KNEEL_PROMPTS || k->visible;
+        return n;
+    }
+    }
+    if (what >= Q_CAMP_ARG0 && what < Q_CAMP_ARG0 + 10)
+        return (int)g_sim.campArgs[what - Q_CAMP_ARG0];
+    if (what >= Q_CP_CONTROL && what <= Q_CP_VISIBLE)
+    {
+        Prompt* c = CampPrompt();
+        if (!c)
+            return -1;
+        switch (what)
+        {
+        case Q_CP_CONTROL:   return (int)c->control;
+        case Q_CP_PRIORITY:  return c->priority;
+        case Q_CP_TRANSPORT: return c->transport;
+        case Q_CP_STANDARD:  return c->standard;
+        case Q_CP_RELEASE:   return c->release;
+        case Q_CP_ATTR18:    return c->attr18;
+        case Q_CP_GROUP:     return c->group;
+        case Q_CP_TAB:       return c->tab;
+        case Q_CP_ENABLED:   return c->enabled;
+        case Q_CP_VISIBLE:   return c->visible;
+        }
     }
     return -999;
 }
@@ -1035,6 +1450,16 @@ extern "C" __declspec(dllexport) void FakeText(int what, char* out, int n)
     else if (what == 4)   // what the live prompt shows right now
     {
         if (Prompt* p = CurrentPrompt())
+            snprintf(out, n, "%s", ShownText(p->text));
+    }
+    else if (what == 5)   // the Set Up Camp prompt's text as set
+    {
+        if (Prompt* p = CampPrompt())
+            snprintf(out, n, "%s", p->text);
+    }
+    else if (what == 6)   // ...and what it shows
+    {
+        if (Prompt* p = CampPrompt())
             snprintf(out, n, "%s", ShownText(p->text));
     }
 }
@@ -1079,7 +1504,26 @@ extern "C" __declspec(dllexport) void FakeInit()
     g_sim.downFrames = 30;       // about a second to get down on one knee...
     g_sim.eventFrame = 8;        // ...and the kneel menu comes up a quarter of a second in
     g_sim.campLoadFrames = 3;
+    g_sim.campHere = 1;          // the wilderness: the kneel menu has its own Set Up Camp
+    g_sim.kitCamp = 1;
+    g_sim.campScriptExists = 1;
     SI(GL_PLAYER, kPlayerPed);
+    // Another script's prompt on E in the shared prompt list (long_update's thread),
+    // which isn't the kneel menu's
+    {
+        Prompt& p = g_prompts[63];
+        memset(&p, 0, sizeof p);
+        p.id = 999;
+        p.valid = p.enabled = p.standard = 1;
+        p.game = 1;
+        p.control = Joaat("INPUT_CONTEXT_Y");
+        snprintf(p.text, sizeof p.text, "%s", "PICKUP");
+        int base = GL_PROMPT_LIST + 1 + 30 * 18;
+        SI(base + 1, 2 | 128);
+        SI(base + 3, p.id);
+        SI(base + 4, (int)p.control);
+        SI(base + 16, 7101);
+    }
     SI(GL_SESSION, -1);
     SI(GL_LODGING, 3);
     SI(GL_ACTIVE_HORSE, 0);

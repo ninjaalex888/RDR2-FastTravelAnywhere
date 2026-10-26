@@ -1,4 +1,4 @@
-FAST TRAVEL ANYWHERE  v1.0.1
+FAST TRAVEL ANYWHERE  v1.1.0
 Red Dead Redemption 2 (PC) - Story Mode
 =====================================================================
 
@@ -7,6 +7,10 @@ Hold E to kneel anywhere, and the kneel menu in the bottom-right corner
 controller), the same button a campfire has. It opens the game's own fast
 travel menu: the same list of places, the same trip with your horse, the
 same rules as at a campfire.
+
+And Set Up Camp (E) is there wherever you kneel, towns included. Where the
+game leaves it out of the kneel menu, the mod puts it in, and the game makes
+camp at the nearest of its own campsites: from a town, just outside it.
 
 
 REQUIREMENTS
@@ -26,7 +30,8 @@ INSTALL
 2. Copy FastTravelAnywhere.asi and FastTravelAnywhere.ini into it.
 3. Start the game and load Story Mode. A yellow message appears in the
    top-left corner for a few seconds:
-       Fast Travel Anywhere 1.0.1 loaded - hold E to kneel, then Space: Fast Travel
+     Fast Travel Anywhere 1.1.0 loaded - hold E to kneel: Space to
+     Fast Travel, E to Set Up Camp anywhere
 
 To uninstall, delete FastTravelAnywhere.asi, FastTravelAnywhere.ini and
 FastTravelAnywhere.log.
@@ -45,6 +50,18 @@ USING IT
 In the menu, use the arrow keys, the mouse or the D-pad. W/S or the left
 stick might make Arthur get up from the kneel, which closes the menu (see
 TROUBLESHOOTING).
+
+
+SET UP CAMP ANYWHERE
+--------------------
+Out in the wilderness the kneel menu has its own Set Up Camp, and the mod
+leaves it alone. In a town, near train tracks or next to someone with a
+mission for you, the game leaves it out; there the mod adds it, on the same
+button (E), with the game's own text. Press it and the game does what its
+own button does: Arthur gets up, pitches camp, the screen fades, and you're
+at your camp, set up at the nearest of the game's campsites (from a town,
+just outside it). A full camp when your horse is within whistling range, a
+small one when it isn't, as the game decides.
 
 
 THE RULES
@@ -66,12 +83,22 @@ why, with the game's own message where it has one ("Your horse is too far
 away to fast travel." and so on). The unlock, horse, wanted and mission
 rules can each be relaxed in FastTravelAnywhere.ini.
 
+Set Up Camp keeps all of the game's camping rules except the ones about the
+place: you need a camp kit, and it isn't added while you're wanted or have
+just committed a crime, in combat, on a mission (unless the mission lets you
+camp), indoors, in a gang hideout, at the gang's camp, in Guarma, in an area
+under lockdown, during a random encounter, an ambush or a minigame, while
+busy with your horse, or with a camp already up. If the game finds no
+campsite to use, it says so itself ("Cannot create camp in this location.").
+
 
 SETTINGS (FastTravelAnywhere.ini)
 ---------------------------------
-Changes take effect the next time you kneel, no restart needed.
+Changes take effect within a couple of seconds, no restart needed.
 
 Enabled=1              Fast Travel in the kneel menu on/off.
+SetUpCampAnywhere=1    Set Up Camp in the kneel menu wherever you kneel.
+                       0 = only where the game offers it itself.
 RequireUnlock=1        Fast travel has to be unlocked, as for your camp.
 RequireHorseNearby=1   Your horse has to be within whistling range.
                        0 = also when it's too far away: you arrive on foot.
@@ -120,6 +147,17 @@ TROUBLESHOOTING
   The log has a "The fast travel menu closed without a choice ..." line
   with everything the game checks; please include it if you report this.
 
+* No Set Up Camp in a town: the log has a "Set Up Camp: ..." line each
+  time you kneel that says why ("not added: wanted", "not added: no camp
+  kit" and so on), or "the kneel menu has its own here" where the game
+  offers it itself.
+
+* Set Up Camp pressed, but no camp: the log follows the game's camp script
+  ("Set Up Camp pressed: ...", "The game's camp script is running.", then
+  how it went). "it found no campsite to use here" means the game had no
+  campsite for that part of the map; it says "Cannot create camp in this
+  location." itself.
+
 
 HOW IT WORKS
 ------------
@@ -131,6 +169,13 @@ screen and packs up when you pick a place). This mod plays the campfire's
 part from the kneel menu: it hands over the same request, and when you pick
 a place, Arthur stands up and the screen fades. The game does the rest.
 
+Set Up Camp: the kneel menu adds its own Set Up Camp only where the game
+allows a camp. The mod looks at the kneel menu's buttons in the game's list
+of prompts, and only when they're there without a Set Up Camp does it add
+one, so there are never two. A press starts the game's camp script with the
+same settings the kneel menu's own button gives it; the game picks the
+campsite and does the rest.
+
 Before it changes anything, the mod checks that the game's internals match
 the version it was made for. If the game doesn't respond, the mod takes the
 request back and turns itself off until the game restarts. Idle in Red Dead
@@ -139,6 +184,12 @@ Online.
 
 CHANGES
 -------
+1.1.0  Set Up Camp anywhere. Where the game leaves Set Up Camp out of the
+       kneel menu (in a town, say), the mod adds it on E, and the game makes
+       camp at the nearest of its campsites, outside town. Its other camping
+       rules still apply. New setting SetUpCampAnywhere (on by default).
+       Settings changes now apply within a couple of seconds, without
+       kneeling again.
 1.0.1  Fast Travel always shows its name now. It could be missing from the
        kneel menu, after a trip for example, while Space still worked: its
        text lives in a part of the game's text that only the camp scripts

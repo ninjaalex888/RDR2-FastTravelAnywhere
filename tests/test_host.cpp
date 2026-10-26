@@ -42,6 +42,9 @@ enum SetWhat
     S_MENU_SHOWS, S_MOVE, S_NO_SCENARIO_TASK, S_STUCK_TRAVEL,
     S_DOWN_FRAMES, S_CAMP_LOADED, S_CAMP_LOAD_FRAMES, S_CAMP_NEVER, S_CAMP_SCRIPT, S_FRENCH, S_CRAFTING,
     S_SET_CAMP, S_CAMPFIRE_HUD, S_HUD_BROKEN, S_NOT_ACTIVE, S_LABEL_UNREADABLE,
+    S_CAMP_HERE, S_LIST_BROKEN, S_KIT_CAMP, S_KIT_SIMPLE, S_BACKUP_INV, S_INTERIOR, S_COMBAT, S_RECENT_CRIME,
+    S_MINIGAME, S_ANIMAL_INTERACTION, S_CAMP_SCRIPT_EXISTS, S_CAMP_SCRIPT_NO_LOAD, S_CAMP_FAILS, S_CAMP_DOWN,
+    S_EVELYN,
 };
 // The camp scripts the fake knows, in the bit order of S_CAMP_SCRIPT, and whether they unload the CAMP text when they end.
 static const char* const kCampScripts[] = { "player_camp", "interactive_campfire", "property_use_core", "campfire_always", "sleeping_scenario" };
@@ -56,6 +59,12 @@ enum GetWhat
     Q_BAD_HELP, Q_PLAYER_X, Q_PLAYER_Y, Q_TIMESCALE_X10, Q_GAME_MS, Q_LAST_UNKNOWN_LO, Q_LAST_BADARG_LO,
     Q_DISABLED_OTHER, Q_CONTEXT_SETS, Q_PAUSE_ENABLED, Q_MOD_MUSIC_STOPS, Q_PCF_100, Q_PCF_101,
     Q_GROUP_DRAWN, Q_CAMP_LOADED, Q_CAMP_REQUESTS, Q_CAMP_DELETES, Q_BLANK_FRAMES, Q_BLANK_TOTAL,
+    Q_FT_PROMPTS, Q_CAMP_PROMPTS, Q_CP_CONTROL, Q_CP_PRIORITY, Q_CP_TRANSPORT, Q_CP_STANDARD, Q_CP_RELEASE,
+    Q_CP_ATTR18, Q_CP_GROUP, Q_CP_TAB, Q_CP_ENABLED, Q_CP_VISIBLE, Q_GAME_PROMPTS, Q_KNEEL_OWN_CAMP,
+    Q_CAMP_STARTS, Q_GAME_CAMP_STARTS, Q_CAMP_ARGC, Q_CAMP_STACK, Q_CAMP_RUNNING, Q_SCRIPT_REQUESTS,
+    Q_NO_LONGER_NEEDED, Q_BAD_SCRIPT_CALLS, Q_BAD_INVENTORY, Q_DISABLED_B, Q_DISABLED_A, Q_CAMP_KNEEL_EXITS,
+    Q_DUP_FRAMES, Q_CAMP_PROMPTS_MAX, Q_CAMP_STATE, Q_KNEEL_VISIBLE, Q_KNEEL_PROMPTS,
+    Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 enum { K_OFF = 0, K_DOWN, K_KNEEL, K_EXIT };
 
@@ -64,6 +73,12 @@ static const int GL_PLAYER = 35, GL_FT_FLAGS = 43907, GL_FT_STATE = 43908, GL_CA
                  GL_ACTIVE_HORSE = 1135, GL_MENU_STOP_A = 1357517, GL_MENU_STOP_B = 1935690;
 static const int CAMP_BIT = 1 << 23;
 static const int kRestGroup = 342152817;
+// What the game's camping rules look at (see CampAvailability in the plugin)
+static const int GL_CAMP_FLAGS2 = 1392041, GL_CAMP_IS_UP = 9459, GL_ZONE = 1894899, GL_ZONE_AREA = 1894901,
+                 GL_AREA_FLAGS = 23118, GL_DISTRICT = 1897993, GL_STORY_CAMP = 1359044, GL_LAW = 1935630,
+                 GL_ON_MISSION = 1898328, GL_MISSION_CAMP = 1914318, GL_ENCOUNTER = 1326827, GL_AMBUSH = 1393449,
+                 GL_HORSE_AWAY = 4190, GL_LED_HORSE = 1900776, GL_CAMP_STATE = 43885, GL_CAMP_FLOW120 = 1353598,
+                 GL_CAMP_FLOW15 = 1836123, GL_ITEM_USE_OFF = 1935697;
 
 static uint32_t Joaat(const char* s)
 {
@@ -195,6 +210,7 @@ static void ResetWorld()
 {
     FakeSet(S_RESET_COUNTERS, 0);
     FakeSet(S_MENU, 0);              // no menu choice left over from a test whose menu never opened
+    FakeSet(S_CAMP_DOWN, 1);         // no camp left up by a test
     FakeSetGlobal(GL_FT_FLAGS, 0);
     FakeSetGlobal(GL_FT_STATE, 0);
     FakeSetGlobal(GL_CAMP, 0);
@@ -203,6 +219,88 @@ static void ResetWorld()
     FakeHorse(100, 0, 1, 0, 10, 0, 2, 150);   // the active horse (slot 0), 10 m away, bonding 2
     FakeHorse(101, 1, 0, 0, 0, 0, 1, 0);      // nothing in slot 1
     FakeSetGlobal(GL_ACTIVE_HORSE, 0);
+    // Set Up Camp: out in the wilderness (the kneel menu has its own), a camp
+    // kit in the satchel, none of the game's camping rules in force
+    FakeSet(S_CAMP_HERE, 1);
+    FakeSet(S_LIST_BROKEN, 0);
+    FakeSet(S_KIT_CAMP, 1);
+    FakeSet(S_KIT_SIMPLE, 0);
+    FakeSet(S_BACKUP_INV, 0);
+    FakeSet(S_INTERIOR, 0);
+    FakeSet(S_COMBAT, 0);
+    FakeSet(S_RECENT_CRIME, 0);
+    FakeSet(S_MINIGAME, 0);
+    FakeSet(S_ANIMAL_INTERACTION, 0);
+    FakeSet(S_CAMP_SCRIPT_EXISTS, 1);
+    FakeSet(S_CAMP_SCRIPT_NO_LOAD, 0);
+    FakeSet(S_CAMP_FAILS, 0);
+    FakeSet(S_EVELYN, 0);
+    static const int zero[] = { GL_CAMP_FLAGS2, GL_CAMP_IS_UP, GL_ZONE, GL_ZONE_AREA, GL_DISTRICT, GL_STORY_CAMP,
+                                GL_ON_MISSION, GL_MISSION_CAMP, GL_ENCOUNTER, GL_AMBUSH, GL_HORSE_AWAY, GL_LED_HORSE,
+                                GL_CAMP_FLOW120, GL_CAMP_FLOW15, GL_ITEM_USE_OFF };
+    for (int g : zero)
+        FakeSetGlobal(g, 0);
+    for (int f = 13; f <= 21; f++)
+        FakeSetGlobal(GL_LAW + f, 0);
+}
+
+// The plugin's Set Up Camp prompt: its text as set, and what it shows.
+static bool CampRawIs(const char* want)
+{
+    char t[300];
+    FakeText(5, t, sizeof t);
+    return strcmp(t, want) == 0;
+}
+static bool CampShows(const char* want)
+{
+    char t[300];
+    FakeText(6, t, sizeof t);
+    return strcmp(t, want) == 0;
+}
+static bool CampArgsAre(const int* want)
+{
+    for (int i = 0; i < 10; i++)
+        if (FakeGet(Q_CAMP_ARG0 + i) != want[i])
+            return false;
+    return true;
+}
+static void CampArgsText(char* out, int n)
+{
+    int len = snprintf(out, n, "(args");
+    for (int i = 0; i < 10 && len < n; i++)
+        len += snprintf(out + len, n - len, " %d", FakeGet(Q_CAMP_ARG0 + i));
+    if (len < n)
+        snprintf(out + len, n - len, ")");
+}
+
+// Kneels in a town (no Set Up Camp of the kneel menu's own) with one of the
+// game's camping rules in force: the mod adds none either, and the log says
+// why; once the rule is lifted (still kneeling), there it is.
+typedef void (*Fn)();
+static void CampRule(const char* name, Fn on, Fn off, const char* why)
+{
+    ResetWorld();
+    FakeSet(S_CAMP_HERE, 0);
+    on();
+    int logged = LogCount(why);
+    Kneel();
+    bool none = FakeGet(Q_CAMP_PROMPTS) == 0;
+    bool says = LogCount(why) > logged;
+    off();
+    Frames(2);
+    bool back = FakeGet(Q_CAMP_PROMPTS) == 1;
+    StandUp();
+    char n[220], d[80];
+    snprintf(n, sizeof n, "%s: no Set Up Camp, the log says why; there once that's over", name);
+    snprintf(d, sizeof d, "(none %d, logged %d, back %d)", none, says, back);
+    Check(n, none && says && back, d);
+}
+
+// The press goes through to player_camp; waits until it has Arthur up.
+static bool CampRuns()
+{
+    return RunUntil([] { return FakeGet(Q_CAMP_STARTS) >= 1; }, 30) &&
+           RunUntil([] { return FakeGet(Q_KNEEL) == K_OFF; }, 60);
 }
 
 int main()
@@ -251,12 +349,14 @@ int main()
     {
         char t[4096];
         FakeText(3, t, sizeof t);
-        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.0.1 loaded") != nullptr);
+        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.1.0 loaded") != nullptr &&
+                                            strstr(t, "Set Up Camp anywhere") != nullptr);
         FILE* f = fopen("FastTravelAnywhere.ini", "rb");
         char ini[4096] = { 0 };
         if (f) { fread(ini, 1, sizeof ini - 1, f); fclose(f); }
         Check("writes the default settings file", strstr(ini, "PromptControl=INPUT_CONTEXT_A") != nullptr &&
-                                                   strstr(ini, "RequireHorseNearby=1") != nullptr);
+                                                   strstr(ini, "RequireHorseNearby=1") != nullptr &&
+                                                   strstr(ini, "SetUpCampAnywhere=1") != nullptr);
     }
 
     // The first kneels, in a French game whose CAMP text loads slowly: the
@@ -1083,6 +1183,321 @@ int main()
     FakeSet(S_ONLINE, 0);
     StandUp();
 
+    Section("Set Up Camp anywhere");
+    {
+        const uint32_t E = Joaat("INPUT_CONTEXT_Y");
+
+        // Out in the wilderness the kneel menu has its own Set Up Camp: left to it.
+        ResetWorld();
+        Kneel();
+        Check("where the game allows a camp: the kneel menu's own Set Up Camp, the mod adds none",
+              FakeGet(Q_KNEEL_OWN_CAMP) == 1 && FakeGet(Q_CAMP_PROMPTS) == 0 && FakeGet(Q_FT_PROMPTS) == 1);
+        Check("...the log says so", LogHas("Set Up Camp: the kneel menu has its own here."));
+        Press(E);
+        Frames(3);
+        Check("...and E there is the game's own button: the mod starts nothing",
+              FakeGet(Q_GAME_CAMP_STARTS) == 1 && FakeGet(Q_CAMP_STARTS) == 0 && FakeGet(Q_SCRIPT_REQUESTS) == 0);
+        StandUp();
+
+        // In a town the kneel menu leaves it out: the mod adds it.
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_KNEEL, 1);
+        {
+            bool drawn = RunUntil([] { return FakeGet(Q_GROUP_DRAWN) == 1; }, 60);
+            Check("in a town (no Set Up Camp in the kneel menu): the mod adds one, with the kneel menu's own buttons",
+                  drawn && FakeGet(Q_KNEEL_OWN_CAMP) == 0 && FakeGet(Q_CAMP_PROMPTS) == 1 && FakeGet(Q_FT_PROMPTS) == 1 &&
+                  FakeGet(Q_KNEEL) == K_DOWN);
+        }
+        RunUntil([] { return FakeGet(Q_KNEEL) == K_KNEEL; }, 60);
+        Frames(2);
+        Check("...on E (INPUT_CONTEXT_Y), in the kneel menu's group, tab 0",
+              (uint32_t)FakeGet(Q_CP_CONTROL) == E && FakeGet(Q_CP_GROUP) == kRestGroup && FakeGet(Q_CP_TAB) == 0);
+        Check("...built as the game builds its own (priority 1, any transport, attribute 18, a tap that fires on press)",
+              FakeGet(Q_CP_PRIORITY) == 1 && FakeGet(Q_CP_TRANSPORT) == 0 && FakeGet(Q_CP_ATTR18) == 1 &&
+              FakeGet(Q_CP_STANDARD) == 1 && FakeGet(Q_CP_RELEASE) == 0);
+        Check("...with the game's own text (SET_CAMP: \"Set Up Camp\")", CampRawIs("SET_CAMP") && CampShows("Set Up Camp"));
+        Check("...enabled and visible", FakeGet(Q_CP_ENABLED) == 1 && FakeGet(Q_CP_VISIBLE) == 1);
+        Check("...the log says so", LogHas("Set Up Camp: added"));
+        Press(E);
+        Check("pressing it: the game's camp script asked for, both of the mod's buttons out of the way",
+              FakeGet(Q_SCRIPT_REQUESTS) == 1 && FakeGet(Q_CAMP_PROMPTS) == 0 && FakeGet(Q_FT_PROMPTS) == 0 &&
+              LogHas("Set Up Camp pressed: starting the game's camp (a full camp"));
+        Frames(1);
+        Check("...the kneel menu's other buttons held meanwhile (Craft, Leave, Fast Travel, Jump)",
+              FakeGet(Q_DISABLED_X) == 1 && FakeGet(Q_DISABLED_Y) == 1 && FakeGet(Q_DISABLED_B) == 1 &&
+              FakeGet(Q_DISABLED_A) == 1 && FakeGet(Q_DISABLED_JUMP) == 1);
+        Check("...and hidden, as the game's own Set Up Camp takes them away (but not deleted: they're the game's)",
+              FakeGet(Q_KNEEL_PROMPTS) == 2 && FakeGet(Q_KNEEL_VISIBLE) == 0);
+        bool started = RunUntil([] { return FakeGet(Q_CAMP_STARTS) >= 1; }, 30);
+        Check("...then player_camp started as the kneel menu's own button starts it: 10 arguments, stack 6096",
+              started && FakeGet(Q_CAMP_ARGC) == 10 && FakeGet(Q_CAMP_STACK) == 6096);
+        {
+            static const int full[10] = { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+            char d[120];
+            CampArgsText(d, sizeof d);
+            Check("...arguments: flags 0 (horse near: a full camp), 0, 0, 0, 0, 1, no camp spot", CampArgsAre(full), d);
+        }
+        Check("...the script let go of once it's running", FakeGet(Q_NO_LONGER_NEEDED) == 1 && FakeGet(Q_BAD_SCRIPT_CALLS) == 0);
+        {
+            bool up = RunUntil([] { return FakeGet(Q_KNEEL) == K_OFF; }, 60);
+            Check("player_camp gets Arthur up, as from the game's own button", up && FakeGet(Q_CAMP_KNEEL_EXITS) == 1);
+        }
+        Frames(5);
+        Check("...one camp, nothing left in the kneel menu, the controls given back",
+              FakeGet(Q_CAMP_STARTS) == 1 && FakeGet(Q_LIVE_PROMPTS) == 0 && FakeGet(Q_DISABLED_X) == 0 &&
+              FakeGet(Q_DISABLED_JUMP) == 0);
+        Check("...the log follows it", LogHas("The game's camp script is running.") &&
+                                       LogHas("Arthur is up, the game is pitching the camp"));
+        {
+            bool pitched = RunUntil([] { return (G(GL_CAMP_IS_UP) & CAMP_BIT) != 0; }, 60);
+            Check("the game pitches the camp (at its nearest campsite)", pitched && FakeGet(Q_CAMP_RUNNING) == 1);
+        }
+        Kneel();
+        Check("kneeling with the camp up: no Set Up Camp added, Fast Travel as usual",
+              FakeGet(Q_CAMP_PROMPTS) == 0 && FakeGet(Q_FT_PROMPTS) == 1 && LogHas("not added: a camp is already up"));
+        StandUp();
+        FakeSet(S_CAMP_DOWN, 1);   // packed up
+        Frames(2);
+        Kneel();
+        Check("packed up: Set Up Camp back in the town", FakeGet(Q_CAMP_PROMPTS) == 1);
+        StandUp();
+
+        // Pressed as soon as it shows, before Arthur is all the way down (the game's own works then too).
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_KNEEL, 1);
+        RunUntil([] { return FakeGet(Q_CAMP_PROMPTS) == 1; }, 60);
+        Press(E);
+        Check("pressed while he's still getting down: player_camp starts at once (it gets him up itself)",
+              FakeGet(Q_KNEEL) == K_DOWN && CampRuns() && FakeGet(Q_CAMP_STARTS) == 1);
+        Frames(30);
+
+        // Fast Travel pressed first (waiting for him to get down), then Set Up Camp.
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_KNEEL, 1);
+        RunUntil([] { return FakeGet(Q_CAMP_PROMPTS) == 1; }, 60);
+        Press(SPACE);
+        Press(E);
+        Check("Fast Travel pressed while getting down, then Set Up Camp: the camp, and the Fast Travel press dropped",
+              CampRuns() && LogHas("Set Up Camp was pressed") && FakeGet(Q_MENU_OPENS) == 0 && G(GL_FT_FLAGS) == 0 && !CampBit());
+        Frames(30);
+
+        // A small camp when the horse isn't near, as the game's button picks.
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeHorse(100, 0, 1, 0, 1000, 0, 2, 150);   // 1 km away
+        Kneel();
+        Check("horse out of whistling range: Set Up Camp still offered (Fast Travel greyed out)",
+              FakeGet(Q_CAMP_PROMPTS) == 1 && FakeGet(Q_CP_ENABLED) == 1 && FakeGet(Q_P_ENABLED) == 0);
+        Press(E);
+        {
+            static const int small[10] = { 128 | 32, 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+            char d[120];
+            bool ran = CampRuns();
+            CampArgsText(d, sizeof d);
+            Check("...a small camp (flags 128 + 32), as the game's button picks", ran && CampArgsAre(small), d);
+        }
+        Frames(30);
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSetGlobal(GL_HORSE_AWAY, 1);              // the horse is near, but "away" as the game marks it
+        Kneel();
+        Press(E);
+        Check("horse near but marked away: a small camp", CampRuns() && FakeGet(Q_CAMP_ARG0) == 160);
+        Frames(30);
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeHorse(100, 0, 1, 0, 1000, 0, 2, 150);   // the active horse far away...
+        FakeHorse(102, -1, 1, 0, 3, 0, 1, 0);       // ...but leading another horse, 3 m off
+        FakeSetGlobal(GL_LED_HORSE, 102);
+        Kneel();
+        Press(E);
+        Check("leading a horse within 5 m: a full camp", CampRuns() && FakeGet(Q_CAMP_ARG0) == 0);
+        Frames(30);
+
+        // The camp kit.
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_KIT_CAMP, 0);
+        Kneel();
+        Check("no camp kit: no Set Up Camp", FakeGet(Q_CAMP_PROMPTS) == 0 && LogHas("not added: no camp kit"));
+        FakeSet(S_KIT_SIMPLE, 1);
+        Frames(2);
+        Check("...the simple camp kit will do", FakeGet(Q_CAMP_PROMPTS) == 1);
+        FakeSet(S_BACKUP_INV, 1);
+        Frames(2);
+        Check("...looked for in the backup inventory while the game uses it", FakeGet(Q_CAMP_PROMPTS) == 1 &&
+                                                                          FakeGet(Q_BAD_INVENTORY) == 0);
+        StandUp();
+
+        // The game's camping rules other than the place.
+        CampRule("wanted", [] { FakeSetGlobal(GL_LAW + 20, 1); }, [] { FakeSetGlobal(GL_LAW + 20, 0); },
+                 "not added: wanted");
+        CampRule("the law closing in", [] { FakeSetGlobal(GL_LAW + 18, 1); FakeSetGlobal(GL_LAW + 19, 2); },
+                 [] { FakeSetGlobal(GL_LAW + 18, 0); FakeSetGlobal(GL_LAW + 19, 0); }, "not added: wanted");
+        CampRule("a crime just committed", [] { FakeSet(S_RECENT_CRIME, 1); }, [] { FakeSet(S_RECENT_CRIME, 0); },
+                 "not added: a crime was committed recently");
+        CampRule("in combat", [] { FakeSet(S_COMBAT, 1); }, [] { FakeSet(S_COMBAT, 0); }, "not added: in combat");
+        CampRule("on a mission", [] { FakeSetGlobal(GL_ON_MISSION, 1); }, [] { FakeSetGlobal(GL_ON_MISSION, 0); },
+                 "not added: on a mission");
+        CampRule("on a mission that lets you camp, then off it",
+                 [] { FakeSetGlobal(GL_ON_MISSION, 1); FakeSetGlobal(GL_MISSION_CAMP, 2); },
+                 [] { FakeSetGlobal(GL_MISSION_CAMP, 3); }, "not added: on a mission");
+        CampRule("in a gang hideout", [] { FakeSetGlobal(GL_ZONE, 4); }, [] { FakeSetGlobal(GL_ZONE, 0); },
+                 "not added: in a gang hideout");
+        CampRule("at the gang's camp", [] { FakeSetGlobal(GL_STORY_CAMP, 1 << 9); }, [] { FakeSetGlobal(GL_STORY_CAMP, 0); },
+                 "not added: at the gang's camp");
+        CampRule("indoors", [] { FakeSet(S_INTERIOR, 1); }, [] { FakeSet(S_INTERIOR, 0); }, "not added: indoors");
+        CampRule("in Guarma", [] { FakeSetGlobal(GL_DISTRICT, 8); }, [] { FakeSetGlobal(GL_DISTRICT, 3); },
+                 "not added: in Guarma");
+        CampRule("an area under lockdown",
+                 [] { FakeSetGlobal(GL_ZONE_AREA, 5); FakeSetGlobal(GL_AREA_FLAGS + 1 + 5 * 11, 1 << 25); },
+                 [] { FakeSetGlobal(GL_AREA_FLAGS + 1 + 5 * 11, 0); }, "not added: the area is under lockdown");
+        CampRule("a minigame", [] { FakeSet(S_MINIGAME, 1); }, [] { FakeSet(S_MINIGAME, 0); },
+                 "not added: something is going on nearby");
+        CampRule("a random encounter", [] { FakeSetGlobal(GL_ENCOUNTER, 4711); }, [] { FakeSetGlobal(GL_ENCOUNTER, 0); },
+                 "not added: something is going on nearby");
+        CampRule("an ambush", [] { FakeSetGlobal(GL_AMBUSH, 16); }, [] { FakeSetGlobal(GL_AMBUSH, 0); },
+                 "not added: something is going on nearby");
+        CampRule("with an animal", [] { FakeSet(S_ANIMAL_INTERACTION, 1); }, [] { FakeSet(S_ANIMAL_INTERACTION, 0); },
+                 "not added: something is going on nearby");
+        CampRule("a camp already up", [] { FakeSetGlobal(GL_CAMP_IS_UP, CAMP_BIT); }, [] { FakeSetGlobal(GL_CAMP_IS_UP, 0); },
+                 "not added: a camp is already up");
+        CampRule("by a campfire", [] { FakeSetGlobal(GL_CAMP, CAMP_BIT); }, [] { FakeSetGlobal(GL_CAMP, 0); },
+                 "not added: a camp is already up");
+        CampRule("player_camp running", [] { FakeSet(S_CAMP_SCRIPT, 1); },
+                 [] { FakeSet(S_CAMP_SCRIPT, 0); g_textPulls++; },   // it unloads the CAMP text as it ends
+                 "not added: a camp is already up");
+        CampRule("camping blocked by a script", [] { FakeSetGlobal(GL_CAMP_FLAGS2, 1); },
+                 [] { FakeSetGlobal(GL_CAMP_FLAGS2, 1 | (1 << 9)); }, "not added: the game has camping blocked");
+        CampRule("a mission whose camp has its own spot",
+                 [] { FakeSetGlobal(GL_CAMP_FLOW120, 7); FakeSetGlobal(GL_FLOW_STATUS + 1 + 7 * 7 + 1, 3); },
+                 [] { FakeSetGlobal(GL_FLOW_STATUS + 1 + 7 * 7 + 1, 5); }, "not added: a mission with its own camp spot");
+        CampRule("...the other such mission",
+                 [] { FakeSetGlobal(GL_CAMP_FLOW15, 9); FakeSetGlobal(GL_FLOW_STATUS + 1 + 9 * 7 + 1, 4); },
+                 [] { FakeSetGlobal(GL_FLOW_STATUS + 1 + 9 * 7 + 1, 0); }, "not added: a mission with its own camp spot");
+        FakeSetGlobal(GL_FLOW_STATUS + 1 + 7 * 7 + 1, 0);
+        CampRule("a stranger mission that bans camping near it", [] { FakeSet(S_EVELYN, 1); }, [] { FakeSet(S_EVELYN, 0); },
+                 "not added: on a mission");
+        CampRule("laying bait (no kit used meanwhile)", [] { FakeSetGlobal(GL_ITEM_USE_OFF, 1); },
+                 [] { FakeSetGlobal(GL_ITEM_USE_OFF, 0); }, "not added: something is going on nearby");
+
+        // Never a second Set Up Camp.
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_LIST_BROKEN, 1);   // the kneel menu's buttons not where the mod looks for them
+        Kneel();
+        Check("the kneel menu's own buttons not found: no Set Up Camp risked", FakeGet(Q_CAMP_PROMPTS) == 0 &&
+              LogHas("weren't found in the game's prompt list"));
+        FakeSet(S_LIST_BROKEN, 0);   // ...found a moment later
+        Frames(2);
+        Check("...found a moment later: added then (they're looked at every frame)", FakeGet(Q_CAMP_PROMPTS) == 1);
+        StandUp();
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        Kneel();
+        FakeSet(S_INTERACTION, 77);
+        Frames(3);
+        Check("someone to talk to: Set Up Camp goes with the kneel menu's buttons", FakeGet(Q_CAMP_PROMPTS) == 0);
+        FakeSet(S_CAMP_HERE, 1);     // ...and when the kneel menu comes back, it has its own
+        FakeSet(S_INTERACTION, 0);
+        Frames(3);
+        Check("...back with its own Set Up Camp this time: the mod's stays out",
+              FakeGet(Q_KNEEL_OWN_CAMP) == 1 && FakeGet(Q_CAMP_PROMPTS) == 0 && FakeGet(Q_FT_PROMPTS) == 1);
+        StandUp();
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_HUD_BROKEN, 1);    // the kneel menu's bit never seen (another game build)
+        Kneel();
+        Check("kneel menu bit never seen: Set Up Camp once he's all the way down, as Fast Travel",
+              FakeGet(Q_CAMP_PROMPTS) == 1 && FakeGet(Q_FT_PROMPTS) == 1);
+        StandUp();
+        FakeSet(S_HUD_BROKEN, 0);
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        Kneel();
+        FakeSet(S_SET_CAMP, 1);      // the kneel menu takes its buttons down (as for its own Set Up Camp)
+        Frames(2);
+        Check("the kneel menu takes its buttons down: Set Up Camp goes too", FakeGet(Q_CAMP_PROMPTS) == 0 &&
+                                                                             FakeGet(Q_LIVE_PROMPTS) == 0);
+        StandUp();
+
+        // When player_camp has trouble.
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_CAMP_FAILS, 1);    // no campsite the game can use here
+        Kneel();
+        Press(E);
+        Check("no campsite the game can use: player_camp says so itself (\"Cannot create camp in this location.\")",
+              CampRuns() && RunUntil([] { return FakeGet(Q_CAMP_RUNNING) == 0; }, 60));
+        Frames(2);
+        Check("...and the log notes it", LogHas("it found no campsite to use here"));
+        FakeSet(S_CAMP_FAILS, 0);
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_CAMP_SCRIPT_NO_LOAD, 1);
+        Kneel();
+        Press(E);
+        Frames(30);
+        Check("player_camp still loading: nothing started yet, the buttons held",
+              FakeGet(Q_CAMP_STARTS) == 0 && FakeGet(Q_DISABLED_X) == 1 && FakeGet(Q_KNEEL) == K_KNEEL);
+        Frames(150);
+        Check("...not loaded after 5 s: says so, lets go of it, the kneel menu as it was",
+              FakeGet(Q_CAMP_STARTS) == 0 && HelpHas("couldn't be set up") && FakeGet(Q_NO_LONGER_NEEDED) == 1 &&
+              FakeGet(Q_CAMP_PROMPTS) == 1 && FakeGet(Q_FT_PROMPTS) == 1 && LogHas("didn't load within 5 s") &&
+              FakeGet(Q_KNEEL_PROMPTS) == 2 && FakeGet(Q_KNEEL_VISIBLE) == 2);
+        StandUp();
+
+        ResetWorld();
+        FakeSet(S_CAMP_HERE, 0);
+        FakeSet(S_CAMP_SCRIPT_EXISTS, 0);
+        Kneel();
+        Press(E);
+        Frames(3);
+        Check("no player_camp script at all: says so, starts nothing", HelpHas("couldn't be set up") &&
+              FakeGet(Q_SCRIPT_REQUESTS) == 0 && LogHas("the game has no player_camp script"));
+        StandUp();
+
+        // Settings.
+        ResetWorld();
+        WriteIni("SetUpCampAnywhere=0\r\n");
+        FakeSet(S_CAMP_HERE, 0);
+        Kneel();
+        Check("SetUpCampAnywhere=0: no Set Up Camp, Fast Travel as before",
+              FakeGet(Q_CAMP_PROMPTS) == 0 && FakeGet(Q_FT_PROMPTS) == 1 && LogHas("off (SetUpCampAnywhere=0)"));
+        Press(E);
+        Frames(3);
+        Check("...and E does nothing", FakeGet(Q_SCRIPT_REQUESTS) == 0 && FakeGet(Q_CAMP_STARTS) == 0);
+        WriteIni("");
+        Frames(70);
+        Check("...turned back on while kneeling: there within a couple of seconds", FakeGet(Q_CAMP_PROMPTS) == 1);
+        StandUp();
+
+        ResetWorld();
+        WriteIni("Enabled=0\r\n");
+        FakeSet(S_CAMP_HERE, 0);
+        {
+            int req = FakeGet(Q_CAMP_REQUESTS);
+            Kneel();
+            Check("Enabled=0 (Fast Travel off): Set Up Camp alone, and the CAMP text left alone",
+                  FakeGet(Q_FT_PROMPTS) == 0 && FakeGet(Q_CAMP_PROMPTS) == 1 && FakeGet(Q_CAMP_REQUESTS) == req);
+            Press(E);
+            Check("...and it works", CampRuns() && FakeGet(Q_CAMP_STARTS) == 1);
+        }
+        Frames(30);
+        WriteIni("");
+        ResetWorld();
+
+        Check("never two Set Up Camps in the kneel menu, nor two of the mod's",
+              FakeGet(Q_DUP_FRAMES) == 0 && FakeGet(Q_CAMP_PROMPTS_MAX) <= 1);
+    }
+
     // Last: the game ignores the request (as with globals at other addresses).
     Section("The game doesn't respond");
     ResetWorld();
@@ -1101,6 +1516,13 @@ int main()
     Check("pressing it says it's off", HelpHas("off"));
     FakeSet(S_SU_IGNORE, 0);
     StandUp();
+    ResetWorld();
+    FakeSet(S_CAMP_HERE, 0);
+    Kneel();
+    Press(Joaat("INPUT_CONTEXT_Y"));
+    Check("...Set Up Camp still works", CampRuns() && FakeGet(Q_CAMP_STARTS) == 1);
+    Frames(30);
+    ResetWorld();
 
     Section("Native calls");
     {
@@ -1111,6 +1533,9 @@ int main()
         Check("every native got its argument count", FakeGet(Q_BAD_ARGS) == 0, d);
         Check("VAR_STRING always as (10, \"LITERAL_STRING\", text)", FakeGet(Q_BAD_VARSTRING) == 0);
         Check("help texts well formed", FakeGet(Q_BAD_HELP) == 0);
+        Check("player_camp only ever asked for, started and let go of by name, with its 10 arguments",
+              FakeGet(Q_BAD_SCRIPT_CALLS) == 0);
+        Check("the camp kit looked for in the right inventory", FakeGet(Q_BAD_INVENTORY) == 0);
         snprintf(d, sizeof d, "(%d frames, text pulled from under it %d times)", FakeGet(Q_BLANK_TOTAL), g_textPulls);
         Check("over the whole run, Fast Travel never sat in the kneel menu without text "
               "(but for a frame each time the tests pulled the text from under it)", FakeGet(Q_BLANK_TOTAL) <= g_textPulls, d);
