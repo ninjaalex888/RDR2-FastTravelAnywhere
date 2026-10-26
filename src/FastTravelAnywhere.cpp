@@ -194,7 +194,8 @@ static const char kDefaultIni[] =
     "Enabled=1\r\n"
     "\r\n"
     "; 1 = with a waypoint on the map, Fast Travel takes you straight there (to the road nearest\r\n"
-    "; it, with your horse). Without a waypoint you get the game's fast travel menu as before.\r\n"
+    "; it, with your horse). Without a waypoint you get the game's fast travel menu as before,\r\n"
+    "; and as Arthur also for a waypoint in New Austin or Blackwater, where the game keeps him out.\r\n"
     "; 0 = always the game's fast travel menu.\r\n"
     "WaypointTravel=1\r\n"
     "; 1 = the clock moves on by the ride's length when you travel to a waypoint\r\n"
@@ -657,12 +658,27 @@ namespace N
     static inline bool ClosestGpsPosition(float x, float y, float z, Vec3* out)
     { return Invoke<int>(0x3FDA2B79AEEE351CULL, x, y, z, out) != 0; }                                            // MAP::_FIND_CLOSEST_GPS_POSITION
     static inline bool GpsRouteFound()       { return Invoke<int>(0x869DAACBBE9FA006ULL) != 0; }                  // PATH::GET_GPS_BLIP_ROUTE_FOUND
-    static inline int  GpsRouteLength()      { return Invoke<int>(0xBBB45C3CF5C8AA85ULL); }                        // PATH::GET_GPS_BLIP_ROUTE_LENGTH
+    static inline int  GpsRouteLength()      { return Invoke<int>(0xBBB45C3CF5C8AA85ULL); }                        // PATH::GET_GPS_BLIP_ROUTE_LENGTH (metres)
+    static inline bool GpsPathOnRoad()       { return Invoke<int>(0xF47A1EB2A538A3A3ULL) != 0; }                  // MAP::_IS_PATH_FOR_GPS_ON_ROAD
     static inline bool SafeCoordForPed(float x, float y, float z, Vec3* out, int flags)
     { return Invoke<int>(0xB61C8E878A4199CAULL, x, y, z, 0, out, flags) != 0; }                                  // PATH::GET_SAFE_COORD_FOR_PED(x, y, z, onGround, out, flags)
-    // ...streaming the place in
+    static inline bool NavmeshLoadedIn(float x1, float y1, float z1, float x2, float y2, float z2)
+    { return Invoke<int>(0xF813C7E63F9062A5ULL, x1, y1, z1, x2, y2, z2) != 0; }                                  // PATH::IS_NAVMESH_LOADED_IN_AREA
+    // The map's zones (mapzones.meta), by type: 0 state, 1 town, 10 district
+    static inline uint32_t MapZoneAt(float x, float y, float z, int type)
+    { return Invoke<uint32_t>(0x43AD8FC02B429D33ULL, x, y, z, type); }                                           // ZONE::_GET_MAP_ZONE_AT_COORDS
+    static inline uint32_t EntityModel(int e)        { return Invoke<uint32_t>(0xDA76A9F39210D365ULL, e); }       // ENTITY::GET_ENTITY_MODEL
+    // Water below (x, y, z): 0 none, 1 water (its surface's height out), 2 something solid first
+    static inline int  WaterProbe(float x, float y, float z, float* surface)
+    {
+        uint64_t slot = 0;   // float* out-parameter: give it a full 8-byte slot
+        int r = Invoke<int>(0x2B3451FA1E3142E2ULL, x, y, z, 1, &slot);                                          // WATER::TEST_VERTICAL_PROBE_AGAINST_ALL_WATER
+        memcpy(surface, &slot, sizeof(float));
+        return r;
+    }
+    // ...streaming the place in (p4 1, as the train's trip does: train_fast_travel_core)
     static inline bool LoadSceneStartSphere(float x, float y, float z, float r)
-    { return Invoke<int>(0x513F8AA5BF2F17CFULL, x, y, z, r, 0) != 0; }                                           // STREAMING::LOAD_SCENE_START_SPHERE
+    { return Invoke<int>(0x513F8AA5BF2F17CFULL, x, y, z, r, 1) != 0; }                                           // STREAMING::LOAD_SCENE_START_SPHERE
     static inline bool IsLoadSceneActive()   { return Invoke<int>(0xCF45DF50C7775F2AULL) != 0; }                  // STREAMING::IS_LOAD_SCENE_ACTIVE
     static inline bool IsLoadSceneLoaded()   { return Invoke<int>(0x0909F71B5C070797ULL) != 0; }                  // STREAMING::IS_LOAD_SCENE_LOADED
     static inline void LoadSceneStop()       { InvokeVoid(0x5A8B01199C3E79C3ULL); }                                // STREAMING::LOAD_SCENE_STOP
@@ -677,13 +693,14 @@ namespace N
     }
     // ...and putting the player and the horses there
     static inline void SetEntityCoords(int e, float x, float y, float z)
-    { InvokeVoid(0x06843DA7060A026BULL, e, x, y, z, 0, 0, 0, 0); }                                                // ENTITY::SET_ENTITY_COORDS(entity, x, y, z, xAxis, yAxis, zAxis, clearArea)
+    { InvokeVoid(0x06843DA7060A026BULL, e, x, y, z, 1, 0, 1, 1); }                                                // ENTITY::SET_ENTITY_COORDS (1, 0, 1, 1: as train_fast_travel_core moves the player)
     static inline void SetEntityCoordsAndHeading(int e, float x, float y, float z, float h)
     { InvokeVoid(0x203BEFFDBE12E96AULL, e, x, y, z, h, 1, 0, 1); }                                                // ENTITY::_SET_ENTITY_COORDS_AND_HEADING (as short_update's func_1610)
     static inline bool PlaceOnGround(int e)  { return Invoke<int>(0x9587913B9E772D29ULL, e, 0) != 0; }            // ENTITY::PLACE_ENTITY_ON_GROUND_PROPERLY
     static inline void FreezePosition(int e, int on) { InvokeVoid(0x7D9EFB7AD6B19754ULL, e, on); }               // ENTITY::FREEZE_ENTITY_POSITION
-    static inline void SetInvincible(int e, int on)  { InvokeVoid(0xA5C38736C426FCB8ULL, e, on); }               // ENTITY::SET_ENTITY_INVINCIBLE
-    static inline bool PlayerInvincible(int pl)      { return Invoke<int>(0x0CBBCB2CCFA7DC4EULL, pl) != 0; }     // PLAYER::GET_PLAYER_INVINCIBLE
+    static inline bool CanBeDamaged(int e)           { return Invoke<int>(0x75DF9E73F2F005FDULL, e) != 0; }      // ENTITY::_GET_ENTITY_CAN_BE_DAMAGED
+    static inline void SetCanBeDamaged(int e, int on) { InvokeVoid(0x0D06D522B90E861FULL, e, on); }              // ENTITY::SET_ENTITY_CAN_BE_DAMAGED
+    static inline bool IsPedFalling(int p)           { return Invoke<int>(0xFB92A102F1C4DFA3ULL, p) != 0; }      // PED::IS_PED_FALLING
     static inline Vec3 OffsetInWorld(int e, float x, float y, float z)
     { return Invoke<Vec3>(0x1899F328B0E12848ULL, e, x, y, z); }                                                   // ENTITY::GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS
     static inline bool CanPedBeMounted(int m)        { return Invoke<int>(0x2D64376CF437363EULL, m) != 0; }      // PED::CAN_PED_BE_MOUNTED
@@ -769,6 +786,8 @@ namespace G
     static const int kInvFlagA    = 1931689;  // Global_1914319.f_17370 \ the third argument the game passes when it
     static const int kInvFlagB    = 1933316;  // Global_1914319.f_18996.f_1 / asks whether the kit is disabled (func_168(0))
     static const int kEvelynSpot  = 1351353;  // Global_1347702[74 /*49*/].f_24: the spot where RCM_EVELYN_MILLER4 bans camping (12 m)
+    // Waypoint travel
+    static const int kSniperOff   = 1934322;  // Global_1934266.f_56: set = medium_update's New Austin sniper is off (its func_367)
 
     // Bits of kFtFlags (short_update func_80)
     static const int FT_MUSIC  = 1;   // play the fast travel music
@@ -834,6 +853,7 @@ static uint32_t H_INPUT_CONTEXT_X, H_INPUT_CONTEXT_Y, H_INPUT_CONTEXT_B, H_INPUT
 static uint32_t H_KIT_CAMP, H_KIT_CAMP_SIMPLE, H_RCM_EVELYN4, H_LAW_DISPATCH_PENDING;
 static uint32_t H_INPUT_MOVE_LR, H_INPUT_MOVE_UD, H_FRONTEND_PAUSE, H_FRONTEND_PAUSE_ALT, H_CTX_FRONTEND_MENU;
 static uint32_t H_KNEEL_EXIT;
+static uint32_t H_PLAYER_ZERO, H_BLACKWATER, H_GAPTOOTH_RIDGE, H_RIO_BRAVO, H_CHOLLA_SPRINGS, H_HENNIGANS_STEAD;
 
 static void InitHashes()
 {
@@ -863,6 +883,12 @@ static void InitHashes()
     H_FRONTEND_PAUSE_ALT = Joaat("INPUT_FRONTEND_PAUSE_ALTERNATE");
     H_CTX_FRONTEND_MENU  = Joaat("FrontendMenu");
     H_KNEEL_EXIT       = Joaat("DYNAMIC_KNEEL_SLOW_EXIT");
+    H_PLAYER_ZERO      = Joaat("PLAYER_ZERO");      // Arthur
+    H_BLACKWATER       = Joaat("BLACKWATER");       // the town (map zone type 1)
+    H_GAPTOOTH_RIDGE   = Joaat("GAPTOOTHRIDGE");    // New Austin's districts (type 10), medium_update's 13 to 16
+    H_RIO_BRAVO        = Joaat("RIOBRAVO");
+    H_CHOLLA_SPRINGS   = Joaat("CHOLLASPRINGS");
+    H_HENNIGANS_STEAD  = Joaat("HENNIGANSSTEAD");
 }
 
 // ===========================================================================
@@ -1269,9 +1295,14 @@ static int Availability(int ped, int player, bool waypoint)
     // other half of func_502, is what a press waits for.
     if (!waypoint && !N::PedHasUseScenarioTask(ped))
         return R_NO_SCENARIO;
-    int horse = HorseCheck(ped, nullptr, nullptr);
-    if (horse != R_OK)
-        return horse;
+    // The game's menu needs a living horse even with RequireHorseNearby=0
+    // (short_update closes it without one); a trip to the waypoint doesn't.
+    if (!waypoint || g_cfg.requireHorseNearby)
+    {
+        int horse = HorseCheck(ped, nullptr, nullptr);
+        if (horse != R_OK)
+            return horse;
+    }
     // A game menu is up, or short_update would close the menu (func_503, func_504).
     if (N::IsUiAppActive(H_PLAYER_MENU) || G::Int(G::kUiBusy, 0) != 0 || G::Int(G::kUiBusy4, 0) != 0 ||
         G::Int(G::kMenuStopA, 0) != 0 || G::Int(G::kMenuStopB, 0) != 0 ||
@@ -1822,10 +1853,18 @@ static void FlowTick(int now, int ped)
 // back in.
 //
 // The place: the point of the GPS route (the line to the waypoint) closest to
-// the waypoint, that is the road nearest it, whose height is known. With no
-// route near it, the waypoint itself: its ground is found as the area loads,
-// trying heights from the ground up (as trainers' "teleport to waypoint" do).
-// With no ground found, back to where the trip began.
+// the waypoint, when the route runs on roads (short_update asks
+// _IS_PATH_FOR_GPS_ON_ROAD before it trusts one): the road nearest it, whose
+// height is known. Otherwise the waypoint itself, whose ground is found as the
+// area loads, trying heights (as trainers' "teleport to waypoint" do). Either
+// way the ground is checked once the place is in, and looked for the same way
+// if it isn't where the route said. In deep water, the nearest shore (a safe
+// spot for a ped, not in water), else the road nearest the waypoint. With no
+// ground found, back to where the trip began.
+//
+// Not where the game keeps Arthur out: New Austin, where its sniper shoots him
+// (medium_update func_97), and Blackwater, which its fast travel menu leaves
+// out for him (short_update func_1576). The menu opens instead.
 //
 // The clock moves on by the ride's length (AdvanceClock=1): the GPS route's
 // length (else the straight line * 1.3) at a steady gallop, or on foot when no
@@ -1833,8 +1872,10 @@ static void FlowTick(int now, int ped)
 
 static const float kWaypointNear     = 60.0f;   // a waypoint this close counts as reached: the menu instead
 static const float kRoadMaxOff       = 300.0f;  // the GPS route's closest point, if it's this close to the waypoint
+static const float kShoreMax         = 150.0f;  // out of deep water: a dry spot this close
 static const float kRideMetresPerMin = 18.0f;   // a steady gallop, about 9 m/s
 static const float kWalkMetresPerMin = 8.0f;    // on foot
+static const int   kProbeMaxMs       = 20000;   // how long to look for the ground at the waypoint
 static const float kProbeHeights[]   = { 100.0f, 150.0f, 50.0f, 0.0f, 200.0f, 250.0f, 300.0f, 350.0f, 400.0f,
                                          450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f, 800.0f, 900.0f, 1000.0f };
 static const int   kProbeCount       = (int)(sizeof kProbeHeights / sizeof kProbeHeights[0]);
@@ -1843,27 +1884,109 @@ struct WaypointTarget
 {
     N::Vec3 wp;          // the waypoint (its z is always 0)
     N::Vec3 dest;        // where to arrive
-    bool    knownZ;      // dest.z is real (a point of the GPS route)
-    float   roadOff;     // how far that point is from the waypoint
+    bool    knownZ;      // dest.z is real (the road nearest the waypoint)
+    float   roadOff;     // how far the road nearest the waypoint is from it
+    N::Vec3 road;        // that road point, however far (somewhere to go from a waypoint in water)
+    bool    hasRoad;
     float   straight;    // metres from the player to the waypoint, as the crow flies
     float   ride;        // metres to ride: the GPS route's length, else the straight line * 1.3
-    bool    route;       // the GPS route's length was known
+    bool    route;       // the GPS route's length was used
 };
 
-// A waypoint on the map, far enough away to travel to.
-static bool WaypointSet(int ped, float* distOut)
+// What Fast Travel does with the waypoint.
+enum WaypointUse
+{
+    WU_NONE,         // none on the map (or WaypointTravel=0): the menu
+    WU_GO,           // off to it
+    WU_HERE,         // it's right here: the menu
+    WU_ARRIVED,      // the last trip to it ended right here (at the road nearest it): the menu
+    WU_NEW_AUSTIN,   // Arthur, and it's in New Austin: the menu
+    WU_BLACKWATER,   // Arthur, and it's in Blackwater: the menu
+};
+
+// Where the game keeps Arthur out (WU_NEW_AUSTIN, WU_BLACKWATER), else 0: New
+// Austin's districts, where medium_update's sniper shoots him (func_97:
+// districts 13 to 16 of its func_866, unless Global_1934266.f_56 turns it
+// off), and the town of Blackwater, which short_update's fast travel menu
+// leaves out for him (func_1576). The zones are looked up at a few heights as
+// well, a waypoint having none.
+static int PlaceRestricted(int ped, float x, float y, float z)
+{
+    if (N::EntityModel(ped) != H_PLAYER_ZERO)
+        return 0;
+    bool sniper = G::Int(G::kSniperOff, 0) == 0;
+    static const float kZs[] = { 0.0f, 50.0f, 100.0f, 200.0f, 300.0f, 500.0f, 800.0f };
+    for (int i = -1; i < (int)(sizeof kZs / sizeof kZs[0]); i++)
+    {
+        float zz = i < 0 ? z : kZs[i];
+        uint32_t district = N::MapZoneAt(x, y, zz, 10);
+        if (sniper && (district == H_GAPTOOTH_RIDGE || district == H_RIO_BRAVO || district == H_CHOLLA_SPRINGS ||
+                       district == H_HENNIGANS_STEAD))
+            return WU_NEW_AUSTIN;
+        if (N::MapZoneAt(x, y, zz, 1) == H_BLACKWATER)
+            return WU_BLACKWATER;
+    }
+    return 0;
+}
+
+// Where the last trip to a waypoint ended: being there with the same waypoint
+// counts as having reached it (the road nearest it may be some way from it).
+static bool  g_wtLastValid = false;
+static float g_wtLastWpX = 0.0f, g_wtLastWpY = 0.0f, g_wtLastAtX = 0.0f, g_wtLastAtY = 0.0f;
+
+// The waypoint's zones, worked out again when it moves, every 2 s, and with each kneel.
+static float g_wuZoneX = 1e9f, g_wuZoneY = 1e9f;
+static int   g_wuZonePed = 0, g_wuZoneAt = 0, g_wuZone = 0;
+static void  WaypointZonesStale() { g_wuZonePed = 0; }
+
+static int WaypointUseFor(int ped, float* distOut)
 {
     if (distOut)
         *distOut = 0.0f;
     if (!g_cfg.waypointTravel || !N::IsWaypointActive())
-        return false;
+        return WU_NONE;
     N::Vec3 me = N::EntityCoords(ped);
     N::Vec3 wp = N::WaypointCoords();
     float dx = wp.x - me.x, dy = wp.y - me.y;
     float d = sqrtf(dx * dx + dy * dy);
     if (distOut)
         *distOut = d;
-    return d >= kWaypointNear;
+    if (d < kWaypointNear)
+        return WU_HERE;
+    if (g_wtLastValid && fabsf(wp.x - g_wtLastWpX) < 1.0f && fabsf(wp.y - g_wtLastWpY) < 1.0f)
+    {
+        float ax = me.x - g_wtLastAtX, ay = me.y - g_wtLastAtY;
+        if (ax * ax + ay * ay < kWaypointNear * kWaypointNear)
+            return WU_ARRIVED;
+    }
+    int now = N::GameTimer();
+    if (wp.x != g_wuZoneX || wp.y != g_wuZoneY || ped != g_wuZonePed || now - g_wuZoneAt > 2000 || now < g_wuZoneAt)
+    {
+        g_wuZoneX = wp.x;
+        g_wuZoneY = wp.y;
+        g_wuZonePed = ped;
+        g_wuZoneAt = now;
+        g_wuZone = PlaceRestricted(ped, wp.x, wp.y, me.z);
+    }
+    return g_wuZone ? g_wuZone : WU_GO;
+}
+
+static const char* WaypointUseText(int wu, float dist)
+{
+    static char buf[64];
+    switch (wu)
+    {
+    case WU_GO:
+        snprintf(buf, sizeof buf, "to your waypoint, %.0f m away", dist);
+        return buf;
+    case WU_HERE:       return "the game's fast travel menu; your waypoint is right here";
+    case WU_ARRIVED:    return "the game's fast travel menu; you're at the road nearest your waypoint";
+    case WU_NEW_AUSTIN: return "the game's fast travel menu: your waypoint is in New Austin, where the game doesn't let Arthur go";
+    case WU_BLACKWATER: return "the game's fast travel menu: your waypoint is in Blackwater, which the game's fast travel "
+                               "leaves out for Arthur";
+    }
+    return !g_cfg.waypointTravel && N::IsWaypointActive() ? "the game's fast travel menu: WaypointTravel=0"
+                                                          : "the game's fast travel menu: no waypoint set";
 }
 
 static void FindWaypointTarget(int ped, WaypointTarget* t)
@@ -1876,26 +1999,34 @@ static void FindWaypointTarget(int ped, WaypointTarget* t)
     t->straight = sqrtf(dx * dx + dy * dy);
     t->dest = t->wp;
     t->dest.z = me.z;
-    // The GPS route's point closest to the waypoint: asked at the player's
-    // height, then again at that point's own, so that a lower road elsewhere
-    // on the route doesn't come out closer.
+    // The GPS route's point closest to the waypoint, when the route runs on
+    // roads. Asked at the player's height, then again at that point's own, so
+    // that a lower road elsewhere on the route doesn't come out closer.
     N::Vec3 r = {};
-    if (N::ClosestGpsPosition(t->wp.x, t->wp.y, me.z, &r))
+    if (N::GpsPathOnRoad() && N::ClosestGpsPosition(t->wp.x, t->wp.y, me.z, &r))
     {
         N::Vec3 r2 = {};
         if (N::ClosestGpsPosition(t->wp.x, t->wp.y, r.z, &r2))
             r = r2;
         float rx = r.x - t->wp.x, ry = r.y - t->wp.y;
         float off = sqrtf(rx * rx + ry * ry);
-        if (off <= kRoadMaxOff && r.z > -100.0f && r.z < 2000.0f)
+        if (r.z > -100.0f && r.z < 2000.0f && !PlaceRestricted(ped, r.x, r.y, r.z))
         {
-            t->dest = r;
-            t->knownZ = true;
+            t->road = r;
+            t->hasRoad = true;
             t->roadOff = off;
+            if (off <= kRoadMaxOff)
+            {
+                t->dest = r;
+                t->knownZ = true;
+            }
         }
     }
+    // The ride: the GPS route's length if it fits a ride to the waypoint (a
+    // route to somewhere else, a mission's, wouldn't), else the straight line
+    // * 1.3.
     int len = N::GpsRouteFound() ? N::GpsRouteLength() : 0;
-    t->route = len > 0;
+    t->route = len > 0 && (float)len >= t->straight * 0.8f - 400.0f && (float)len <= t->straight * 4.0f + 1000.0f;
     t->ride = t->route ? (float)len : t->straight * 1.3f;
 }
 
@@ -1910,23 +2041,29 @@ enum WtPhase
 {
     WT_IDLE,
     WT_FADING,    // Arthur stands up, the screen fades out
-    WT_PROBING,   // the waypoint's ground: trying heights while the area loads
+    WT_PROBING,   // finding the ground: trying heights while the area loads
     WT_LOADING,   // the place (its height known) streaming in, the player held there
-    WT_FADEIN,    // arrived: the screen comes back
+    WT_FADEIN,    // arrived: the screen comes back, the player unhurtable until he's down
 };
 
 static int            g_wtPhase   = WT_IDLE;
 static int            g_wtPhaseAt = 0;
+static int            g_wtTickAt  = 0;          // the last tick (the clocks stop while the game is paused)
 static WaypointTarget g_wt;
 static int            g_wtPed = 0, g_wtHorse = 0, g_wtHorse2 = 0;
-static N::Vec3        g_wtOrigin;           // where the trip began (to go back to if the place won't load)
-static N::Vec3        g_wtGoal;             // where the player is held while it loads
-static bool           g_wtReturning   = false;
-static int            g_wtProbe       = 0;  // the height being tried (kProbeHeights)
-static int            g_wtProbeAt     = 0;
-static bool           g_wtInvincible  = false;  // we made the player invincible
-static bool           g_wtWeFaded     = false;
-static int            g_wtMinutes     = 0;
+static N::Vec3        g_wtOrigin;               // where the trip began (to go back to if the place won't do)
+static N::Vec3        g_wtGoal;                 // where the player is held while it loads
+static bool           g_wtReturning  = false;
+static bool           g_wtProbed     = false;   // the ground has been looked for (once)
+static bool           g_wtShore      = false;   // gone from deep water to dry land (once)
+static const char*    g_wtFailMsg    = nullptr; // the message when it went back
+static int            g_wtProbe      = 0;       // the height being tried (kProbeHeights)
+static int            g_wtProbeAt    = 0;
+static int            g_wtProbeStart = 0;
+static int            g_wtGuarded    = 0;       // bits: the plugin made the player (1), the horse (2), the second horse (4) unhurtable
+static bool           g_wtScene      = false;   // the plugin's load scene is running
+static bool           g_wtWeFaded    = false;
+static int            g_wtMinutes    = 0;
 
 static void WtSetPhase(int phase, int now)
 {
@@ -1934,9 +2071,25 @@ static void WtSetPhase(int phase, int now)
     g_wtPhaseAt = now;
 }
 
-// The player and the horses held, frozen, at the spot (a metre up) while it loads.
+// Deep water at (x, y), over the ground at z (deeper than a metre): its surface.
+static bool DeepWater(float x, float y, float z, float* surface)
+{
+    float s = 0.0f;
+    if (N::WaterProbe(x, y, z + 100.0f, &s) == 1 && s > z + 1.0f)
+    {
+        *surface = s;
+        return true;
+    }
+    return false;
+}
+
+// The player and the horses held, frozen, at the spot (a metre up, above any
+// water there) while it loads.
 static void WtHold(float x, float y, float z)
 {
+    float s;
+    if (DeepWater(x, y, z, &s))
+        z = s;
     N::SetEntityCoords(g_wtPed, x, y, z + 1.0f);
     N::FreezePosition(g_wtPed, 1);
     if (g_wtHorse)
@@ -1951,57 +2104,93 @@ static void WtHold(float x, float y, float z)
     }
 }
 
-static void WtRelease()
+// Only the plugin's own load scene is ever stopped.
+static void WtStopScene()
 {
-    if (g_wtPed && N::DoesEntityExist(g_wtPed))
-        N::FreezePosition(g_wtPed, 0);
-    if (g_wtHorse && N::DoesEntityExist(g_wtHorse))
-    {
-        N::FreezePosition(g_wtHorse, 0);
-        N::SetInvincible(g_wtHorse, 0);
-    }
-    if (g_wtHorse2 && N::DoesEntityExist(g_wtHorse2))
-    {
-        N::FreezePosition(g_wtHorse2, 0);
-        N::SetInvincible(g_wtHorse2, 0);
-    }
-    if (g_wtInvincible && g_wtPed && N::DoesEntityExist(g_wtPed))
-        N::SetInvincible(g_wtPed, 0);
-    g_wtInvincible = false;
-    if (N::IsLoadSceneActive())
+    if (g_wtScene && N::IsLoadSceneActive())
         N::LoadSceneStop();
+    g_wtScene = false;
 }
 
-// Stop where things are: let go of the player and the horses, give the screen back.
-static void WtAbort(int now, const char* why)
+static void WtStartScene(float x, float y, float z, float radius)
+{
+    WtStopScene();
+    g_wtScene = N::LoadSceneStartSphere(x, y, z, radius);
+}
+
+// Unhurtable on the way: each of them only if it could be hurt, and put back as it was.
+static void WtGuard(int bit, int e)
+{
+    if (e && N::DoesEntityExist(e) && N::CanBeDamaged(e))
+    {
+        N::SetCanBeDamaged(e, 0);
+        g_wtGuarded |= bit;
+    }
+}
+
+static void WtUnguard()
+{
+    const int ents[3] = { g_wtPed, g_wtHorse, g_wtHorse2 };
+    for (int i = 0; i < 3; i++)
+        if ((g_wtGuarded & (1 << i)) && ents[i] && N::DoesEntityExist(ents[i]))
+            N::SetCanBeDamaged(ents[i], 1);
+    g_wtGuarded = 0;
+}
+
+static void WtUnfreeze()
+{
+    const int ents[3] = { g_wtPed, g_wtHorse, g_wtHorse2 };
+    for (int i = 0; i < 3; i++)
+        if (ents[i] && N::DoesEntityExist(ents[i]))
+            N::FreezePosition(ents[i], 0);
+    WtStopScene();
+}
+
+// Stop where things are: let go of the player and the horses, and give the
+// screen back, unless the game's death screen takes it over.
+static void WtAbort(int now, const char* why, bool fadeIn)
 {
     Log("Waypoint travel: stopped (%s).", why);
-    WtRelease();
-    if (g_wtWeFaded && (N::IsFadedOut() || N::IsFadingOut()))
+    WtUnfreeze();
+    WtUnguard();
+    if (fadeIn && g_wtWeFaded && (N::IsFadedOut() || N::IsFadingOut()))
         N::FadeIn(800);
     g_wtWeFaded = false;
     WtSetPhase(WT_IDLE, now);
 }
 
-// Off to a spot: its height known (held there while it loads) or not (try heights).
-static void WtGoTo(int now, N::Vec3 goal, bool knownZ)
+// A save loading, or an online session: what the trip held went with the old
+// world. Forget the trip without touching anything.
+static void WtDrop(const char* why)
+{
+    Log("Waypoint travel: dropped (%s).", why);
+    g_wtGuarded = 0;
+    g_wtScene = false;
+    g_wtWeFaded = false;
+    g_wtPhase = WT_IDLE;
+}
+
+// Off to a spot whose height is known: held there while it loads.
+static void WtGoTo(int now, N::Vec3 goal)
 {
     g_wtGoal = goal;
-    if (N::IsLoadSceneActive())
-        N::LoadSceneStop();
-    if (knownZ)
-    {
-        WtHold(goal.x, goal.y, goal.z);
-        N::LoadSceneStartSphere(goal.x, goal.y, goal.z, 60.0f);
-        WtSetPhase(WT_LOADING, now);
-    }
-    else
-    {
-        g_wtProbe   = 0;
-        g_wtProbeAt = now;
-        WtHold(goal.x, goal.y, kProbeHeights[0]);
-        WtSetPhase(WT_PROBING, now);
-    }
+    WtHold(goal.x, goal.y, goal.z);
+    WtStartScene(goal.x, goal.y, goal.z, 60.0f);
+    WtSetPhase(WT_LOADING, now);
+}
+
+// Off to a spot whose height isn't known: heights are tried until the ground shows.
+static void WtProbe(int now, float x, float y)
+{
+    g_wtProbed = true;
+    g_wtGoal.x = x;
+    g_wtGoal.y = y;
+    g_wtGoal.z = kProbeHeights[0];
+    g_wtProbe = 0;
+    g_wtProbeAt = g_wtProbeStart = now;
+    WtHold(x, y, kProbeHeights[0]);
+    WtStartScene(x, y, kProbeHeights[0], 100.0f);
+    WtSetPhase(WT_PROBING, now);
 }
 
 static void StartWaypointTravel(int now, int ped)
@@ -2012,16 +2201,19 @@ static void StartWaypointTravel(int now, int ped)
     g_wtPed = ped;
     g_wtHorse = g_wtHorse2 = 0;
     g_wtOrigin = N::EntityCoords(ped);
-    g_wtReturning = false;
-    g_wtInvincible = false;
+    g_wtReturning = g_wtProbed = g_wtShore = false;
+    g_wtFailMsg = nullptr;
+    g_wtGuarded = 0;
+    g_wtScene = false;
     g_wtWeFaded = false;
+    g_wtTickAt = now;
+    const char* how = g_wt.route ? " by the GPS route" : ", the straight line x 1.3";
     if (g_wt.knownZ)
-        Log("Fast Travel pressed: travelling to your waypoint, %.0f m away (to the road %.0f m from it; "
-            "ride %.0f m%s).", g_wt.straight, g_wt.roadOff, g_wt.ride, g_wt.route ? " by the GPS route" : "");
+        Log("Fast Travel pressed: travelling to your waypoint, %.0f m away (to the road %.0f m from it; ride %.0f m%s).",
+            g_wt.straight, g_wt.roadOff, g_wt.ride, how);
     else
-        Log("Fast Travel pressed: travelling to your waypoint, %.0f m away (no GPS route near it: to the waypoint "
-            "itself, its ground found on arrival; ride %.0f m%s).", g_wt.straight, g_wt.ride,
-            g_wt.route ? " by the GPS route" : ", the straight line x 1.3");
+        Log("Fast Travel pressed: travelling to your waypoint, %.0f m away (no road near it: to the waypoint itself, "
+            "its ground found on arrival; ride %.0f m%s).", g_wt.straight, g_wt.ride, how);
     if (g_cfg.standUp)
         N::GivePedHashCommand(ped, H_KNEEL_EXIT, 2.0f);   // the kneel menu's own Leave
     if (!N::IsFadedOut() && !N::IsFadingOut())
@@ -2033,7 +2225,7 @@ static void StartWaypointTravel(int now, int ped)
 }
 
 // The screen is black: who comes along, then off.
-static void WtDepart(int now, int ped, int player)
+static void WtDepart(int now, int ped)
 {
     // The horses, as short_update picks them (func_80 state 2): the active
     // horse if it's within whistling range, else the slot-1 horse if that one
@@ -2058,13 +2250,9 @@ static void WtDepart(int now, int ped, int player)
         N::UnhitchHorse(g_wtHorse2);
 
     N::ClearPedTasksImmediately(ped);
-    g_wtInvincible = !N::PlayerInvincible(player);
-    if (g_wtInvincible)
-        N::SetInvincible(ped, 1);
-    if (g_wtHorse)
-        N::SetInvincible(g_wtHorse, 1);
-    if (g_wtHorse2)
-        N::SetInvincible(g_wtHorse2, 1);
+    WtGuard(1, ped);
+    WtGuard(2, g_wtHorse);
+    WtGuard(4, g_wtHorse2);
 
     g_wtMinutes = 0;
     if (g_cfg.advanceClock)
@@ -2075,17 +2263,16 @@ static void WtDepart(int now, int ped, int player)
     }
     Log("Waypoint travel: screen black; %s%s.", g_wtHorse ? "the horse comes along" : "on foot (no horse in whistling range)",
         g_wtHorse2 ? ", and the second horse" : "");
-    WtGoTo(now, g_wt.dest, g_wt.knownZ);
+    if (g_wt.knownZ)
+        WtGoTo(now, g_wt.dest);
+    else
+        WtProbe(now, g_wt.dest.x, g_wt.dest.y);
 }
 
-// Loaded: on the ground there, on the horse, the clock moved on, the screen back.
-static void WtArrive(int now)
+// On the ground there, on the horse, the clock moved on, the screen back.
+static void WtArrive(int now, float x, float y, float z)
 {
     int ped = g_wtPed;
-    float x = g_wtGoal.x, y = g_wtGoal.y, z = g_wtGoal.z;
-    float gz;
-    if (N::GroundZ(x, y, z + 3.0f, &gz) && fabsf(gz - z) < 20.0f)
-        z = gz;
     // A spot a ped can stand on, not indoors and not in water (12, as the
     // game's scripts ask for it).
     N::Vec3 safe = {};
@@ -2106,13 +2293,15 @@ static void WtArrive(int now)
     if (g_wtReturning)
         heading = HeadingTo(x, y, g_wt.wp.x, g_wt.wp.y);
 
-    WtRelease();
+    WtUnfreeze();   // still unhurtable until he's down (WT_FADEIN)
     bool mounted = false;
-    if (g_wtHorse && N::DoesEntityExist(g_wtHorse) && !N::IsEntityDead(g_wtHorse))
+    bool horseThere = g_wtHorse && N::DoesEntityExist(g_wtHorse) && !N::IsEntityDead(g_wtHorse);
+    if (horseThere)
     {
         // As short_update's func_1610: the horse on the ground there, then the player in its saddle.
         N::SetEntityCoordsAndHeading(g_wtHorse, x, y, z, heading);
-        N::PlaceOnGround(g_wtHorse);
+        if (!N::PlaceOnGround(g_wtHorse))
+            Log("Waypoint travel: the game couldn't put the horse on the ground there.");
         N::SetPedConfigFlag(g_wtHorse, 136, 0);   // PCF_CannotBeMounted off
         if (N::CanPedBeMounted(g_wtHorse))
         {
@@ -2126,7 +2315,6 @@ static void WtArrive(int now)
     }
     if (!mounted)
     {
-        bool horseThere = g_wtHorse && N::DoesEntityExist(g_wtHorse) && !N::IsEntityDead(g_wtHorse);
         float px = x, py = y;
         if (horseThere)
         {
@@ -2136,12 +2324,17 @@ static void WtArrive(int now)
             Log("Waypoint travel: the horse can't be mounted right now; it stays next to you.");
         }
         N::SetEntityCoordsAndHeading(ped, px, py, z, heading);
-        N::PlaceOnGround(ped);
+        if (!N::PlaceOnGround(ped))
+            Log("Waypoint travel: the game couldn't put you on the ground there.");
     }
     if (g_wtHorse2 && N::DoesEntityExist(g_wtHorse2) && !N::IsEntityDead(g_wtHorse2))
     {
-        N::Vec3 o = N::OffsetInWorld(ped, 2.0f, -2.0f, 0.0f);   // as short_update's func_518
-        N::SetEntityCoordsAndHeading(g_wtHorse2, o.x, o.y, o.z, heading);
+        // Behind on the right, as short_update's func_518 (2, -2), worked out from
+        // the spot and the heading: the player may not be in the saddle's place yet.
+        float hr = heading * 0.0174532925f;
+        float fx = -sinf(hr), fy = cosf(hr);   // ahead
+        float rx = cosf(hr), ry = sinf(hr);    // to the right
+        N::SetEntityCoordsAndHeading(g_wtHorse2, x + rx * 2.0f - fx * 2.0f, y + ry * 2.0f - fy * 2.0f, z, heading);
         N::PlaceOnGround(g_wtHorse2);
     }
     N::SetGameplayCamRelativeHeading(0.0f);
@@ -2158,44 +2351,117 @@ static void WtArrive(int now)
         g_wtReturning ? "back" : "arrived", x, y, z, sqrtf(wx * wx + wy * wy), safeOk ? " (a safe spot nearby)" : "",
         mounted ? "on the horse" : "on foot");
     if (g_wtReturning)
-        HelpText(nullptr, "Couldn't find solid ground at your waypoint. Try a waypoint on or near a road.");
+        HelpText(nullptr, g_wtFailMsg ? g_wtFailMsg : "Couldn't find solid ground at your waypoint. Try a waypoint on or near a road.");
+    else
+    {
+        g_wtLastValid = true;
+        g_wtLastWpX = g_wt.wp.x;
+        g_wtLastWpY = g_wt.wp.y;
+        g_wtLastAtX = x;
+        g_wtLastAtY = y;
+    }
     N::FadeIn(1500);
     g_wtWeFaded = false;
     WtSetPhase(WT_FADEIN, now);
 }
 
-// Somewhere the place didn't come in: go back to where the trip began, once.
+// Somewhere the place won't do: go back to where the trip began, once.
 static void WtGiveUp(int now, const char* why)
 {
     if (g_wtReturning)
     {
         Log("Waypoint travel: %s on the way back too; putting you down where the trip began.", why);
-        g_wtGoal = g_wtOrigin;
-        WtArrive(now);
+        WtArrive(now, g_wtOrigin.x, g_wtOrigin.y, g_wtOrigin.z);
         return;
     }
     Log("Waypoint travel: %s; going back to where the trip began.", why);
     g_wtReturning = true;
-    WtGoTo(now, g_wtOrigin, true);
+    WtGoTo(now, g_wtOrigin);
 }
 
-static void WaypointTick(int now, int ped, int player)
+// Loaded: the ground checked, out of deep water, then down there.
+static void WtSettle(int now)
 {
-    int age = now - g_wtPhaseAt;
-    if (g_wtPhase != WT_FADEIN)
-        HoldControls();
-
-    if (g_wtPhase != WT_FADEIN && (N::IsEntityDead(ped) || ped != g_wtPed))
+    float x = g_wtGoal.x, y = g_wtGoal.y, z = g_wtGoal.z;
+    // The ground right there: from just above where it should be, else from higher up.
+    float gz;
+    bool ground = (N::GroundZ(x, y, z + 3.0f, &gz) && fabsf(gz - z) < 20.0f) ||
+                  (N::GroundZ(x, y, z + 50.0f, &gz) && gz > z - 20.0f);
+    if (ground)
+        z = gz;
+    else if (!g_wtReturning && !g_wtProbed)
     {
-        WtAbort(now, "the player died");
+        Log("Waypoint travel: no ground at %.0f, %.0f, %.1f, where the route said; looking for it.", x, y, z);
+        WtProbe(now, x, y);
         return;
+    }
+
+    // Deep water (a waypoint in a lake, say): to the nearest shore, else to the road nearest the waypoint.
+    float surface;
+    if (!g_wtReturning && !g_wtShore && DeepWater(x, y, z, &surface))
+    {
+        g_wtShore = true;
+        N::Vec3 s = {};
+        if (N::SafeCoordForPed(x, y, surface, &s, 12))
+        {
+            float sx = s.x - x, sy = s.y - y;
+            float d = sqrtf(sx * sx + sy * sy);
+            if (d <= kShoreMax && !PlaceRestricted(g_wtPed, s.x, s.y, s.z))
+            {
+                Log("Waypoint travel: the waypoint is in deep water (%.1f m); going to the shore, %.0f m away.",
+                    surface - z, d);
+                WtGoTo(now, s);
+                return;
+            }
+        }
+        if (g_wt.hasRoad)
+        {
+            Log("Waypoint travel: the waypoint is in deep water (%.1f m), no shore near it; going to the road "
+                "nearest it, %.0f m from it.", surface - z, g_wt.roadOff);
+            WtGoTo(now, g_wt.road);
+            return;
+        }
+        g_wtFailMsg = "Your waypoint is in deep water. Try a waypoint on land.";
+        WtGiveUp(now, "the waypoint is in deep water, with no shore or road near it");
+        return;
+    }
+    WtArrive(now, x, y, z);
+}
+
+static void WaypointTick(int now, int ped)
+{
+    // The pause menu stops the trip's clocks.
+    int dt = now - g_wtTickAt;
+    g_wtTickAt = now;
+    if (N::IsPauseMenuActive())
+    {
+        g_wtPhaseAt += dt;
+        g_wtProbeAt += dt;
+        g_wtProbeStart += dt;
+        return;
+    }
+    int age = now - g_wtPhaseAt;
+
+    if (g_wtPhase != WT_FADEIN)
+    {
+        HoldControls();
+        if (ped != g_wtPed)
+        {
+            WtAbort(now, "the player changed", true);
+            return;
+        }
+        if (N::IsEntityDead(ped))
+        {
+            WtAbort(now, "the player died", false);   // the death screen takes over the fade
+            return;
+        }
     }
 
     switch (g_wtPhase)
     {
     case WT_FADING:
         if (N::IsFadedOut() || age > 4000)
-            WtDepart(now, ped, player);
+            WtDepart(now, ped);
         break;
 
     case WT_PROBING:
@@ -2206,21 +2472,23 @@ static void WaypointTick(int now, int ped, int player)
         float gz;
         if (coll && N::GroundZ(g_wtGoal.x, g_wtGoal.y, h + 1.0f, &gz))
         {
-            Log("Waypoint travel: the ground at the waypoint is at %.1f (found from %.0f).", gz, h);
+            Log("Waypoint travel: the ground at the waypoint is at %.1f (found from %.0f, %.1f s in).", gz, h,
+                (now - g_wtProbeStart) / 1000.0);
             N::Vec3 goal = g_wtGoal;
             goal.z = gz;
-            WtGoTo(now, goal, true);
+            WtGoTo(now, goal);
             break;
         }
-        // Loaded here and nothing below: the ground is higher. Not loaded yet:
-        // wait a moment for it before moving on.
-        if ((coll && now - g_wtProbeAt > 300) || now - g_wtProbeAt > 1500)
+        // Loaded here and nothing below: the ground is higher, or not in yet.
+        // Not loaded yet: a moment for it. Round the heights again until 20 s.
+        if ((coll && now - g_wtProbeAt > 500) || now - g_wtProbeAt > 1500)
         {
-            if (++g_wtProbe >= kProbeCount)
+            if (now - g_wtProbeStart > kProbeMaxMs)
             {
                 WtGiveUp(now, "no ground found at the waypoint");
                 break;
             }
+            g_wtProbe = (g_wtProbe + 1) % kProbeCount;
             g_wtProbeAt = now;
             WtHold(g_wtGoal.x, g_wtGoal.y, kProbeHeights[g_wtProbe]);
         }
@@ -2231,12 +2499,17 @@ static void WaypointTick(int now, int ped, int player)
     {
         N::RequestCollisionAt(g_wtGoal.x, g_wtGoal.y, g_wtGoal.z);
         bool coll  = N::CollisionLoadedAround(ped);
-        bool scene = !N::IsLoadSceneActive() || N::IsLoadSceneLoaded();
-        if (coll && (scene || age > 8000) && age > 500)
+        bool scene = !g_wtScene || !N::IsLoadSceneActive() || N::IsLoadSceneLoaded();
+        // The navmesh, for a safe spot (the game's scripts check a few metres around a spot)
+        bool nav   = N::NavmeshLoadedIn(g_wtGoal.x - 2.0f, g_wtGoal.y - 2.0f, g_wtGoal.z - 2.0f,
+                                        g_wtGoal.x + 2.0f, g_wtGoal.y + 2.0f, g_wtGoal.z + 2.0f);
+        if (coll && (scene || age > 8000) && (nav || age > 10000) && age > 500)
         {
             if (!scene)
                 Log("Waypoint travel: the area is still loading after 8 s; its ground is in, going ahead.");
-            WtArrive(now);
+            if (!nav)
+                Log("Waypoint travel: the area's navmesh isn't in after 10 s; going ahead.");
+            WtSettle(now);
         }
         else if (age > 15000)
             WtGiveUp(now, "the place didn't load within 15 s");
@@ -2244,10 +2517,14 @@ static void WaypointTick(int now, int ped, int player)
     }
 
     case WT_FADEIN:
+        // The screen back; unhurtable until he's down (not falling), 6 s at most.
         if (N::IsFadedIn() || age > 4000)
         {
             if (!N::IsFadedIn() && !N::IsFadingIn())
                 N::FadeIn(800);
+            if (age < 6000 && N::IsPedFalling(ped))
+                break;
+            WtUnguard();
             Log("Waypoint travel: done.");
             WtSetPhase(WT_IDLE, now);
         }
@@ -2774,7 +3051,7 @@ static void CampPromptTick(int now, int ped, int player)
 
 static bool g_kneelUp     = false;
 static int  g_lastReason  = -1;
-static bool g_lastWaypoint = false;
+static int  g_lastWaypoint = -1;     // the WaypointUse last logged
 static int  g_lastHelpAt  = -100000;
 static int  g_lastHelpWhy = -1;
 static int  g_iniCheckAt  = 0;
@@ -2807,10 +3084,12 @@ static void LogKneelDetails(int ped)
         b.ped, !b.exists ? "none" : b.dead ? "dead" : "alive", b.dist, b.range);
     if (N::IsWaypointActive())
     {
-        float d = 0.0f;
-        WaypointSet(ped, &d);
-        Log("  waypoint: %.0f m away (GPS route %s, %d m)%s", d, N::GpsRouteFound() ? "found" : "not found",
-            N::GpsRouteLength(), g_cfg.waypointTravel ? "" : "; WaypointTravel=0: the menu instead");
+        N::Vec3 me = N::EntityCoords(ped), wp = N::WaypointCoords();
+        float dx = wp.x - me.x, dy = wp.y - me.y, d = 0.0f;
+        int wu = WaypointUseFor(ped, &d);
+        Log("  waypoint: %.0f m away (GPS route %s, %d m, %s); Fast Travel: %s",
+            sqrtf(dx * dx + dy * dy), N::GpsRouteFound() ? "found" : "not found", N::GpsRouteLength(),
+            N::GpsPathOnRoad() ? "on roads" : "not on roads", WaypointUseText(wu, d));
     }
     else
         Log("  waypoint: none");
@@ -2835,22 +3114,20 @@ static bool FtPromptTick(int now, int ped, int player)
         return false;
     }
 
-    // With a waypoint on the map the button takes you there; without one it
-    // opens the game's fast travel menu.
+    // With a waypoint on the map the button takes you there; without one (or
+    // one it can't take you to) it opens the game's fast travel menu.
     float wpDist = 0.0f;
-    bool waypoint = WaypointSet(ped, &wpDist);
+    int wu = WaypointUseFor(ped, &wpDist);
+    bool waypoint = wu == WU_GO;
     int r = Availability(ped, player, waypoint);
-    if (r != g_lastReason || waypoint != g_lastWaypoint)
+    if (r != g_lastReason || wu != g_lastWaypoint)
     {
-        if (r == R_OK && waypoint)
-            Log("Fast Travel: available (to your waypoint, %.0f m away).", wpDist);
-        else if (r == R_OK)
-            Log("Fast Travel: available (the game's fast travel menu%s).",
-                g_cfg.waypointTravel && N::IsWaypointActive() ? "; your waypoint is right here" : ": no waypoint set");
+        if (r == R_OK)
+            Log("Fast Travel: available (%s).", WaypointUseText(wu, wpDist));
         else
             Log("Fast Travel: %s.", ReasonName(r));
         g_lastReason = r;
-        g_lastWaypoint = waypoint;
+        g_lastWaypoint = wu;
     }
 
     // The kneel menu shows its prompts before Arthur is all the way down, but
@@ -2912,6 +3189,9 @@ static bool FtPromptTick(int now, int ped, int player)
         }
         if (pressed && g_pressAt < 0)
         {
+            if (wu == WU_NEW_AUSTIN || wu == WU_BLACKWATER)
+                HelpText(nullptr, wu == WU_NEW_AUSTIN ? "Fast travel can't take Arthur to New Austin. Pick a place instead."
+                                                      : "Fast travel can't take Arthur to Blackwater. Pick a place instead.");
             g_pressAt = now;
             if (ReadyForMenu(ped, now))
             {
@@ -2977,6 +3257,7 @@ static void IdleTick(int now, int ped, int player)
         g_kneelOwnCamp = -2;   // the kneel menu's own buttons are looked at afresh
         if (up)
         {
+            WaypointZonesStale();
             if (IniChanged())
             {
                 LoadSettings();
@@ -3058,14 +3339,11 @@ static void ScriptMain()
                     N::ScriptNoLongerNeeded("player_camp");
                 g_campPhase = CP_IDLE;
                 g_hiddenCount = 0;
-                if (g_wtPhase != WT_IDLE)
-                {
-                    WtRelease();
-                    g_wtWeFaded = false;
-                    g_wtPhase = WT_IDLE;
-                }
             }
         }
+        // A save loading or an online session during a trip to the waypoint: gone with the old world.
+        if (g_wtPhase != WT_IDLE && (online || N::IsLoadingScreenActive()))
+            WtDrop(online ? "an online session started" : "a loading screen came up");
 
         int ped = online ? 0 : N::PlayerPedId();
         if (!online && ped != 0 && !N::IsLoadingScreenActive())
@@ -3091,7 +3369,7 @@ static void ScriptMain()
             if (g_phase != PH_IDLE)
                 FlowTick(now, ped);
             else if (g_wtPhase != WT_IDLE)
-                WaypointTick(now, ped, player);
+                WaypointTick(now, ped);
             else if (g_campPhase != CP_IDLE)
                 CampTick(now, ped);
             else if (!N::IsPauseMenuActive())

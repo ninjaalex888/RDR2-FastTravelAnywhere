@@ -17,7 +17,8 @@
 // whose label isn't loaded shows no text.
 // For waypoint travel: the map's waypoint and the GPS route to it, the ground
 // (collision streams in a few frames after an entity arrives somewhere, only
-// near its height), load scenes, safe spots, mounting and the clock.
+// near its height), load scenes, the navmesh, safe spots, water, the map's
+// zones (New Austin, Blackwater), mounting, the damage flag and the clock.
 // For Set Up Camp: the kneel menu's own prompts in the scripts' shared prompt
 // list (Global_1945188), its own Set Up Camp only where the game allows a camp,
 // the script threads, launching player_camp, and player_camp itself (it gets
@@ -85,6 +86,7 @@ struct Ent
     int      rank, points;
     int      pcf388;                   // PCF_DisableFatallyWoundedBehaviour
     int      frozen, invincible, untargettable, cannotMount, hitched, unhitches;
+    int      nodamage;                 // SET_ENTITY_CAN_BE_DAMAGED(e, false)
     float    heading;
 };
 static Ent g_ents[8];
@@ -191,6 +193,24 @@ struct Sim
     int   collRequests;
     int   dupFrames;                   // frames the drawn kneel menu had two Set Up Camps
     int   campPromptsMax;              // most Set Up Camp prompts of the plugin's at once
+    // waypoint travel, after the review
+    uint32_t playerModel;              // PLAYER_ZERO (Arthur) or PLAYER_THREE (John)
+    int   playerNoDamage;              // the player can't be damaged
+    int   gpsOnRoad;                   // _IS_PATH_FOR_GPS_ON_ROAD
+    float naX;                         // west of this is New Austin (its district CHOLLASPRINGS)
+    int   bwOn; float bwX, bwY;        // the town of Blackwater, 200 m around (bwX, bwY)
+    float zoneZMin;                    // the zones only answer at this height and above
+    int   zoneAsks;
+    float waterR, waterDepth;          // a lake around the waypoint: its radius, its depth over the ground there
+    int   navLoadFrames, navNever;     // the navmesh: in this many frames after collision starts loading / never
+    int   groundLateFrames, areaFrames;// the ground away from home answers only this long after arriving there
+    int   playerFalling;
+    int   loadingScreen;
+    int   sceneP4;                     // LOAD_SCENE_START_SPHERE's last argument
+    int   otherScene;                  // another script's load scene is running
+    int   badCoordFlags;               // SET_ENTITY_COORDS not called with (1, 0, 1, 1)
+    int   waterAsks;
+    int   underwaterFrames;            // frames the player was held frozen under a lake's surface
 };
 static Sim g_sim;
 
@@ -445,6 +465,21 @@ static float GroundAt(float x, float y)
 }
 static bool AwayFromHome(float x, float y) { return x * x + y * y > 300.0f * 300.0f; }
 
+// A lake around the waypoint (waterR > 0): its surface waterDepth above the ground there.
+static bool InLake(float x, float y)
+{
+    if (g_sim.waterR <= 0.0f || !g_sim.wpActive)
+        return false;
+    float dx = x - g_sim.wpX, dy = y - g_sim.wpY;
+    return dx * dx + dy * dy <= g_sim.waterR * g_sim.waterR;
+}
+static float LakeSurface() { return g_sim.destGround + g_sim.waterDepth; }
+static bool NearPlayer(float x, float y, float r)
+{
+    float dx = x - g_sim.px, dy = y - g_sim.py;
+    return dx * dx + dy * dy <= r * r;
+}
+
 // Collision around the player: in once he has stayed put a few frames, within 300 m of the ground's height.
 static bool CollisionLoaded()
 {
@@ -452,6 +487,8 @@ static bool CollisionLoaded()
         return false;
     return g_sim.collFrames >= g_sim.collLoadFrames && fabsf(g_sim.pz - GroundAt(g_sim.px, g_sim.py)) <= 300.0f;
 }
+
+static bool NavLoaded() { return !g_sim.navNever && g_sim.collFrames >= g_sim.navLoadFrames; }
 
 static void MovePlayer(float x, float y, float z)
 {
@@ -614,7 +651,12 @@ uint64_t* FS_nativeCall()
         for (int i = 0; i < 3; i++) { uint64_t raw = 0; memcpy(&raw, &v[i], 4); g_result[i] = raw; }
         break;
     }
-    case 0xDA76A9F39210D365ULL: { Want(1); Ent* x = FindEnt(I(0)); g_result[0] = x ? x->model : 0; break; } // GET_ENTITY_MODEL
+    case 0xDA76A9F39210D365ULL: {                                                         // GET_ENTITY_MODEL
+        Want(1);
+        Ent* x = FindEnt(I(0));
+        g_result[0] = I(0) == kPlayerPed ? g_sim.playerModel : x ? x->model : 0;
+        break;
+    }
     case 0xCF8176912DDA4EA5ULL: { Want(1); int e = I(0); g_result[0] = e == kPlayerPed || FindEnt(e) != nullptr; break; } // IS_ENTITY_A_PED
     case 0xB980061DA992779DULL: { Want(1); int e = I(0); Ent* x = FindEnt(e); g_result[0] = e == kPlayerPed ? 1 : (x ? x->human : 0); break; } // IS_PED_HUMAN
     case 0x84A2DD9AC37C35C1ULL: { Want(1); Ent* x = FindEnt(I(0)); g_result[0] = x ? x->injured : 0; break; } // IS_PED_INJURED
@@ -643,22 +685,87 @@ uint64_t* FS_nativeCall()
     case 0xB61C8E878A4199CAULL:                                                           // GET_SAFE_COORD_FOR_PED
         Want(6);
         if (I(5) != 12) g_sim.badSafeFlags++;
-        if (g_sim.safeOk && CollisionLoaded())
+        if (g_sim.safeOk && CollisionLoaded() && NavLoaded() && NearPlayer(F(0), F(1), 200.0f))
         {
             float x = F(0) + 3.0f, y = F(1);
+            if (InLake(F(0), F(1)))
+            {
+                // not in water: the lake's shore, straight out from its middle
+                float dx = F(0) - g_sim.wpX, dy = F(1) - g_sim.wpY, d = sqrtf(dx * dx + dy * dy);
+                if (d < 0.01f) { dx = 1.0f; dy = 0.0f; d = 1.0f; }
+                x = g_sim.wpX + dx / d * (g_sim.waterR + 5.0f);
+                y = g_sim.wpY + dy / d * (g_sim.waterR + 5.0f);
+            }
             SetVec(g_args[4], x, y, GroundAt(x, y));
             g_result[0] = 1;
         }
         break;
+    case 0xF813C7E63F9062A5ULL: {                                                         // IS_NAVMESH_LOADED_IN_AREA
+        Want(6);
+        float cx = (F(0) + F(3)) / 2.0f, cy = (F(1) + F(4)) / 2.0f;
+        g_result[0] = NavLoaded() && CollisionLoaded() && NearPlayer(cx, cy, 50.0f);
+        break;
+    }
+    case 0xF47A1EB2A538A3A3ULL: Want(0); g_result[0] = g_sim.wpActive && g_sim.gpsFound && g_sim.gpsOnRoad; break; // _IS_PATH_FOR_GPS_ON_ROAD
+    case 0x43AD8FC02B429D33ULL: {                                                         // _GET_MAP_ZONE_AT_COORDS
+        Want(4);
+        g_sim.zoneAsks++;
+        float x = F(0), y = F(1), z = F(2);
+        int type = I(3);
+        uint32_t zone = 0;
+        if (z >= g_sim.zoneZMin)
+        {
+            if (type == 10) zone = x < g_sim.naX ? H("CHOLLASPRINGS") : H("HEARTLANDS");
+            else if (type == 0) zone = x < g_sim.naX ? H("STATE_NEW_AUSTIN") : H("STATE_NEW_HANOVER");
+            else if (type == 1)
+            {
+                float dx = x - g_sim.bwX, dy = y - g_sim.bwY;
+                zone = g_sim.bwOn && dx * dx + dy * dy <= 200.0f * 200.0f ? H("BLACKWATER") : 0;
+            }
+        }
+        g_result[0] = zone;
+        break;
+    }
+    case 0x2B3451FA1E3142E2ULL: {                                                         // TEST_VERTICAL_PROBE_AGAINST_ALL_WATER
+        Want(5);
+        g_sim.waterAsks++;
+        float x = F(0), y = F(1), z = F(2);
+        // water is known near the player only (it streams in with the place)
+        if (InLake(x, y) && NearPlayer(x, y, 300.0f) && z > LakeSurface())
+        {
+            float s = LakeSurface();
+            uint64_t* out = (uint64_t*)(uintptr_t)g_args[4];
+            if (out) { *out = 0; memcpy(out, &s, 4); }
+            g_result[0] = 1;
+        }
+        break;
+    }
+    case 0x75DF9E73F2F005FDULL: {                                                         // _GET_ENTITY_CAN_BE_DAMAGED
+        Want(1);
+        Ent* x = FindEnt(I(0));
+        g_result[0] = I(0) == kPlayerPed ? !g_sim.playerNoDamage : x ? !x->nodamage : 1;
+        break;
+    }
+    case 0x0D06D522B90E861FULL: {                                                         // SET_ENTITY_CAN_BE_DAMAGED
+        Want(2);
+        if (I(0) == kPlayerPed) g_sim.playerNoDamage = !I(1);
+        else if (Ent* x = FindEnt(I(0))) x->nodamage = !I(1);
+        break;
+    }
+    case 0xFB92A102F1C4DFA3ULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.playerFalling; break;       // IS_PED_FALLING
     case 0x513F8AA5BF2F17CFULL:                                                           // LOAD_SCENE_START_SPHERE
         Want(5);
+        g_sim.sceneP4 = I(4);
+        if (g_sim.otherScene && g_sim.sceneActive)
+            break;                                   // another script's load scene is running: none started
+        g_sim.otherScene = 0;
         g_sim.sceneActive = 1; g_sim.sceneLoaded = 0; g_sim.sceneStarts++;
         g_sim.sceneLoadIn = g_sim.sceneNever ? -1 : (g_sim.sceneLoadFrames > 0 ? g_sim.sceneLoadFrames : 1);
         g_result[0] = 1;
         break;
     case 0xCF45DF50C7775F2AULL: Want(0); g_result[0] = g_sim.sceneActive; break;                              // IS_LOAD_SCENE_ACTIVE
     case 0x0909F71B5C070797ULL: Want(0); g_result[0] = g_sim.sceneActive && g_sim.sceneLoaded; break;         // IS_LOAD_SCENE_LOADED
-    case 0x5A8B01199C3E79C3ULL: Want(0); g_sim.sceneActive = 0; g_sim.sceneLoaded = 0; g_sim.sceneLoadIn = 0; break; // LOAD_SCENE_STOP
+    case 0x5A8B01199C3E79C3ULL: Want(0); g_sim.sceneActive = 0; g_sim.sceneLoaded = 0; g_sim.sceneLoadIn = 0; g_sim.otherScene = 0; break; // LOAD_SCENE_STOP
     case 0x0A3720F162A033C9ULL: Want(3); g_sim.collRequests++; break;                                        // REQUEST_COLLISION_AT_COORD
     case 0xBEB1600952B9CF5CULL: Want(1); g_result[0] = I(0) == kPlayerPed && CollisionLoaded(); break;       // HAS_COLLISION_LOADED_AROUND_ENTITY
     case 0x24FA4267BB8D2431ULL: {                                                         // GET_GROUND_Z_FOR_3D_COORD
@@ -667,6 +774,8 @@ uint64_t* FS_nativeCall()
         float dx = x - g_sim.px, dy = y - g_sim.py;
         bool here = dx * dx + dy * dy <= 50.0f * 50.0f && CollisionLoaded();
         bool none = g_sim.noGround && AwayFromHome(x, y);
+        if (AwayFromHome(x, y) && g_sim.areaFrames < g_sim.groundLateFrames)
+            none = true;                                       // the ground isn't in yet, though collision says so
         if (here && !none && z > GroundAt(x, y))
         {
             float gz = GroundAt(x, y);
@@ -676,7 +785,11 @@ uint64_t* FS_nativeCall()
         }
         break;
     }
-    case 0x06843DA7060A026BULL: Want(8); SetEntityPos(I(0), F(1), F(2), F(3), 0.0f, false); break;           // SET_ENTITY_COORDS
+    case 0x06843DA7060A026BULL:                                                           // SET_ENTITY_COORDS
+        Want(8);
+        if (I(4) != 1 || I(5) != 0 || I(6) != 1 || I(7) != 1) g_sim.badCoordFlags++;
+        SetEntityPos(I(0), F(1), F(2), F(3), 0.0f, false);
+        break;
     case 0x203BEFFDBE12E96AULL: Want(8); SetEntityPos(I(0), F(1), F(2), F(3), F(4), true); break;            // _SET_ENTITY_COORDS_AND_HEADING
     case 0x9587913B9E772D29ULL: {                                                         // PLACE_ENTITY_ON_GROUND_PROPERLY
         Want(2);
@@ -946,7 +1059,7 @@ uint64_t* FS_nativeCall()
     case 0xB15CD1CF58771DE1ULL: Want(0); g_result[0] = g_sim.mission; break;              // GET_MISSION_FLAG
     case 0xAD401C63158ACBAAULL: Want(1); g_result[0] = g_sim.wanted; break;               // IS_LAW_INCIDENT_ACTIVE
     case 0x535384D6067BA42EULL: Want(0); g_result[0] = g_sim.paused; break;               // IS_PAUSE_MENU_ACTIVE
-    case 0x71D4BF5890659B0CULL: Want(0); g_result[0] = 0; break;                          // GET_IS_LOADING_SCREEN_ACTIVE
+    case 0x71D4BF5890659B0CULL: Want(0); g_result[0] = g_sim.loadingScreen; break;        // GET_IS_LOADING_SCREEN_ACTIVE
     case 0x9DE624D2FC4B603FULL: Want(0); g_result[0] = g_sim.online; break;               // NETWORK_IS_SESSION_STARTED
     case 0x10FAB35428CCC9D7ULL: Want(0); g_result[0] = 0; break;                          // NETWORK_IS_GAME_IN_PROGRESS
 
@@ -1227,6 +1340,9 @@ extern "C" __declspec(dllexport) void FakeGameTick()
 
     // waypoint travel: collision streams in where the player stays put; a load scene finishes
     g_sim.collFrames++;
+    g_sim.areaFrames = AwayFromHome(g_sim.px, g_sim.py) ? g_sim.areaFrames + 1 : 0;
+    if (g_sim.playerFrozen && InLake(g_sim.px, g_sim.py) && g_sim.pz < LakeSurface())
+        g_sim.underwaterFrames++;
     if (g_sim.sceneActive && g_sim.sceneLoadIn > 0 && --g_sim.sceneLoadIn == 0)
         g_sim.sceneLoaded = 1;
     // a frozen player doesn't fall; an unfrozen one stands on the ground if it's in
@@ -1392,6 +1508,9 @@ enum SetWhat
     S_WP_ACTIVE, S_WP_X, S_WP_Y, S_GPS_FOUND, S_GPS_LEN, S_GPS_ROAD, S_ROAD_X, S_ROAD_Y, S_ROAD_Z, S_DEST_GROUND,
     S_NO_GROUND, S_COLL_NEVER, S_SCENE_NEVER, S_SAFE_OK, S_PLAYERPOS_Z, S_HORSE_UNMOUNTABLE, S_CLOCK,
     S_HORSE_HITCHED,
+    S_PLAYER_JOHN, S_GPS_ON_ROAD, S_NA_X, S_BW_ON, S_BW_X, S_BW_Y, S_ZONE_ZMIN, S_WATER_R, S_WATER_DEPTH,
+    S_NAV_NEVER, S_GROUND_LATE, S_PLAYER_FALLING, S_LOADING_SCREEN, S_OTHER_SCENE, S_PLAYER_NODAMAGE,
+    S_HORSE_NODAMAGE, S_PLAYER_FROZEN, S_FADE, S_NAV_FRAMES,
 };
 
 extern "C" __declspec(dllexport) void FakeSet(int what, int v)
@@ -1466,6 +1585,25 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
     case S_HORSE_UNMOUNTABLE: { Ent* h = FindEnt(100); if (h) h->cannotMount = v; break; }
     case S_CLOCK:         g_sim.clockMinutes = v; break;
     case S_HORSE_HITCHED: { Ent* h = FindEnt(100); if (h) h->hitched = v; break; }
+    case S_PLAYER_JOHN:   g_sim.playerModel = v ? H("PLAYER_THREE") : H("PLAYER_ZERO"); break;
+    case S_GPS_ON_ROAD:   g_sim.gpsOnRoad = v; break;
+    case S_NA_X:          g_sim.naX = (float)v; break;
+    case S_BW_ON:         g_sim.bwOn = v; break;
+    case S_BW_X:          g_sim.bwX = (float)v; break;
+    case S_BW_Y:          g_sim.bwY = (float)v; break;
+    case S_ZONE_ZMIN:     g_sim.zoneZMin = (float)v; break;
+    case S_WATER_R:       g_sim.waterR = (float)v; break;
+    case S_WATER_DEPTH:   g_sim.waterDepth = (float)v; break;
+    case S_NAV_NEVER:     g_sim.navNever = v; break;
+    case S_GROUND_LATE:   g_sim.groundLateFrames = v; break;
+    case S_PLAYER_FALLING: g_sim.playerFalling = v; break;
+    case S_LOADING_SCREEN: g_sim.loadingScreen = v; break;
+    case S_OTHER_SCENE:   if (v) { g_sim.otherScene = 1; g_sim.sceneActive = 1; g_sim.sceneLoaded = 1; } else g_sim.otherScene = 0; break;
+    case S_PLAYER_NODAMAGE: g_sim.playerNoDamage = v; break;
+    case S_HORSE_NODAMAGE: { Ent* h = FindEnt(100); if (h) h->nodamage = v; break; }
+    case S_PLAYER_FROZEN: g_sim.playerFrozen = v; break;
+    case S_FADE:          g_sim.fade = v; break;   // the screen as the game left it (0 in, 2 out)
+    case S_NAV_FRAMES:    g_sim.navLoadFrames = v; break;
     case S_CRAFTING:
         // the kneel menu's Craft: simple_crafting loads the CAMP text when it
         // starts (its func_30) and unloads it when it ends
@@ -1507,6 +1645,7 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
         g_sim.campArgc = g_sim.campStack = 0;
         g_sim.gpsAsks = 0; g_sim.gpsAskZ[0] = g_sim.gpsAskZ[1] = 0.0f;
         g_sim.sceneStarts = g_sim.mounts = g_sim.camHeadings = g_sim.clockAdded = g_sim.collRequests = 0;
+        g_sim.zoneAsks = g_sim.waterAsks = g_sim.underwaterFrames = 0; g_sim.sceneP4 = -1;
         g_sim.mountedOn = 0;
         memset(g_sim.campArgs, 0, sizeof g_sim.campArgs);
         g_helpCount = 0;
@@ -1532,6 +1671,8 @@ enum GetWhat
     Q_PLAYER_Z, Q_FROZEN, Q_INVINCIBLE, Q_SCENE_ACTIVE, Q_SCENE_STARTS, Q_MOUNTS, Q_CLOCK_ADDED, Q_CLOCK,
     Q_GPS_ASKS, Q_GPS_ASK_Z0, Q_GPS_ASK_Z1, Q_BAD_SAFE_FLAGS, Q_H101_X, Q_H101_Y, Q_H100_X, Q_H100_Y,
     Q_HORSE_UNTARGETTABLE, Q_COLL_REQUESTS, Q_CAM_HEADINGS, Q_PLAYER_HEADING, Q_H100_HEADING, Q_H100_UNHITCHES,
+    Q_UNDAMAGEABLE, Q_PLAYER_NODAMAGE, Q_H100_NODAMAGE, Q_SCENE_P4, Q_BAD_COORD_FLAGS, Q_ZONE_ASKS, Q_WATER_ASKS,
+    Q_IN_LAKE, Q_UNDERWATER_FRAMES,
     Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 
@@ -1671,6 +1812,20 @@ extern "C" __declspec(dllexport) int FakeGet(int what)
     case Q_PLAYER_HEADING:  return (int)lroundf(g_sim.playerHeading);
     case Q_H100_HEADING:    { Ent* e = FindEnt(100); return e ? (int)lroundf(e->heading) : -1; }
     case Q_H100_UNHITCHES:  { Ent* e = FindEnt(100); return e ? e->unhitches : -1; }
+    case Q_UNDAMAGEABLE:
+    {
+        int n = g_sim.playerNoDamage;
+        for (int i = 0; i < g_entCount; i++) n += g_ents[i].nodamage;
+        return n;
+    }
+    case Q_PLAYER_NODAMAGE: return g_sim.playerNoDamage;
+    case Q_H100_NODAMAGE:   { Ent* e = FindEnt(100); return e ? e->nodamage : -1; }
+    case Q_SCENE_P4:        return g_sim.sceneP4;
+    case Q_BAD_COORD_FLAGS: return g_sim.badCoordFlags;
+    case Q_ZONE_ASKS:       return g_sim.zoneAsks;
+    case Q_WATER_ASKS:      return g_sim.waterAsks;
+    case Q_IN_LAKE:         return InLake(g_sim.px, g_sim.py);
+    case Q_UNDERWATER_FRAMES: return g_sim.underwaterFrames;
     case Q_KNEEL_VISIBLE:
     case Q_KNEEL_PROMPTS:
     {
@@ -1760,7 +1915,7 @@ extern "C" __declspec(dllexport) void FakeHorse(int handle, int slot, int exists
         e->handle = handle;
     }
     e->exists = exists; e->dead = dead; e->injured = 0; e->writhe = 0; e->human = 0;
-    e->frozen = e->invincible = e->untargettable = e->cannotMount = e->hitched = e->unhitches = 0;
+    e->frozen = e->invincible = e->untargettable = e->cannotMount = e->hitched = e->unhitches = e->nodamage = 0;
     e->heading = 0.0f;
     e->x = (float)x; e->y = (float)y; e->z = 0.0f;
     e->model = kHorseModel; e->rank = level; e->points = points;
@@ -1795,6 +1950,12 @@ extern "C" __declspec(dllexport) void FakeInit()
     g_sim.sceneLoadFrames = 10;
     g_sim.safeOk = 1;
     g_sim.clockMinutes = 9 * 60;
+    g_sim.playerModel = Joaat("PLAYER_ZERO");
+    g_sim.gpsOnRoad = 1;
+    g_sim.naX = -1.0e9f;         // no New Austin unless a test puts it somewhere
+    g_sim.zoneZMin = -1.0e9f;
+    g_sim.waterDepth = 5.0f;
+    g_sim.navLoadFrames = 12;
     SI(GL_PLAYER, kPlayerPed);
     // Another script's prompt on E in the shared prompt list (long_update's thread),
     // which isn't the kneel menu's
