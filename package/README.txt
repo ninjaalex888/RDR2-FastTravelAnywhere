@@ -1,10 +1,12 @@
-FAST TRAVEL ANYWHERE  v1.2.0
+FAST TRAVEL ANYWHERE  v1.2.1
 Red Dead Redemption 2 (PC) - Story Mode
 =====================================================================
 
 Hold E to kneel anywhere, and the kneel menu in the bottom-right corner
 (Craft, Set Up Camp, Leave) gets a Fast Travel button on Space (A on a
-controller), the same button a campfire has.
+controller), the same button a campfire has. Where the game won't kneel at
+all (in Saint Denis, say), keep holding E for a second and the mod has
+Arthur kneel.
 
 * With a waypoint on your map, it takes you straight there: the screen
   fades out, and a few seconds later you're at your waypoint (on the road
@@ -35,11 +37,22 @@ INSTALL
 2. Copy FastTravelAnywhere.asi and FastTravelAnywhere.ini into it.
 3. Start the game and load Story Mode. A yellow message appears in the
    top-left corner for a few seconds:
-     Fast Travel Anywhere 1.2.0 loaded - hold E to kneel: Space to
+     Fast Travel Anywhere 1.2.1 loaded - hold E to kneel: Space to
      Fast Travel, E to Set Up Camp anywhere
 
 To uninstall, delete FastTravelAnywhere.asi, FastTravelAnywhere.ini and
 FastTravelAnywhere.log.
+
+
+KNEELING
+--------
+Hold E with nothing around you, and Arthur kneels: the kneel menu appears
+in the bottom-right corner. In some places the game doesn't kneel at all,
+Saint Denis among them. There, keep holding E: after a second the mod has
+Arthur kneel, the way he does to craft from the satchel, and the kneel menu
+comes up as anywhere else. It leaves E alone when it's doing something
+else: mounting, looting, picking something up, grabbing someone,
+surrendering while wanted, or in a shop. KneelAnywhere=0 turns this off.
 
 
 USING IT: TO YOUR WAYPOINT
@@ -142,6 +155,9 @@ SETTINGS (FastTravelAnywhere.ini)
 Changes take effect within a couple of seconds, no restart needed.
 
 Enabled=1              Fast Travel in the kneel menu on/off.
+KneelAnywhere=1        Where the game won't kneel (Saint Denis, say),
+                       holding E for a second has Arthur kneel anyway.
+                       0 = only where the game kneels by itself.
 WaypointTravel=1       With a waypoint on your map, Fast Travel takes you
                        straight there (to the road nearest it, with your
                        horse). 0 = always the game's fast travel menu.
@@ -176,6 +192,12 @@ LockMovementInMenu=0   Experimental. If the menu closes when you scroll it
 
 TROUBLESHOOTING
 ---------------
+* Holding E doesn't kneel: after a second of holding it, the log has a
+  "Kneel: ..." line: "the plugin has him kneel" (then "the kneel menu came
+  up"), or why it left E to the game ("a game script has the kneel button
+  turned off here", "busy with something else", "wanted", "on a mission"
+  and so on). No such line means the mod didn't see E held.
+
 * Space opens the menu although a waypoint is set: the log's
   "Fast Travel: available (...)" line says why: no waypoint set, your
   waypoint is right here (closer than 60 m), you're at the road nearest
@@ -260,6 +282,11 @@ Online.
 
 CHANGES
 -------
+1.2.1  Kneel anywhere. Where holding E doesn't kneel (in Saint Denis, say),
+       keep holding it for a second and the mod has Arthur kneel, as he
+       does to craft from the satchel, so the kneel menu with Fast Travel
+       and Set Up Camp is there too. New setting KneelAnywhere (on by
+       default).
 1.2.0  Fast travel to your waypoint. With a waypoint on your map, Fast
        Travel in the kneel menu takes you straight there, to the road
        nearest it, on your horse, with the clock moved on by the ride's

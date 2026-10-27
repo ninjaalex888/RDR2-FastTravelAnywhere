@@ -54,6 +54,7 @@ enum SetWhat
     S_PLAYER_JOHN, S_GPS_ON_ROAD, S_NA_X, S_BW_ON, S_BW_X, S_BW_Y, S_ZONE_ZMIN, S_WATER_R, S_WATER_DEPTH,
     S_NAV_NEVER, S_GROUND_LATE, S_PLAYER_FALLING, S_LOADING_SCREEN, S_OTHER_SCENE, S_PLAYER_NODAMAGE,
     S_HORSE_NODAMAGE, S_PLAYER_FROZEN, S_FADE, S_NAV_FRAMES,
+    S_HOLD_E, S_NO_GAME_KNEEL, S_DYN_DISABLED, S_PRF187, S_BUSY_TASK, S_SPEED_CM, S_CARRYING, S_AIMING, S_NO_BRAIN,
 };
 // The camp scripts the fake knows, in the bit order of S_CAMP_SCRIPT, and whether they unload the CAMP text when they end.
 static const char* const kCampScripts[] = { "player_camp", "interactive_campfire", "property_use_core", "campfire_always", "sleeping_scenario" };
@@ -77,7 +78,7 @@ enum GetWhat
     Q_GPS_ASKS, Q_GPS_ASK_Z0, Q_GPS_ASK_Z1, Q_BAD_SAFE_FLAGS, Q_H101_X, Q_H101_Y, Q_H100_X, Q_H100_Y,
     Q_HORSE_UNTARGETTABLE, Q_COLL_REQUESTS, Q_CAM_HEADINGS, Q_PLAYER_HEADING, Q_H100_HEADING, Q_H100_UNHITCHES,
     Q_UNDAMAGEABLE, Q_PLAYER_NODAMAGE, Q_H100_NODAMAGE, Q_SCENE_P4, Q_BAD_COORD_FLAGS, Q_ZONE_ASKS, Q_WATER_ASKS,
-    Q_IN_LAKE, Q_UNDERWATER_FRAMES,
+    Q_IN_LAKE, Q_UNDERWATER_FRAMES, Q_SCENARIO_STARTS, Q_BAD_SCENARIO_ARGS, Q_GAME_KNEELS, Q_KNEELING_NO_MENU,
     Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 enum { K_OFF = 0, K_DOWN, K_KNEEL, K_EXIT };
@@ -288,6 +289,15 @@ static void ResetWorld()
     FakeSet(S_PLAYER_NODAMAGE, 0);
     FakeSet(S_PLAYER_FROZEN, 0);
     FakeSetGlobal(GL_SNIPER_OFF, 0);
+    // Holding E: not held, the game kneels where it will, nothing else going on
+    FakeSet(S_HOLD_E, 0);
+    FakeSet(S_NO_GAME_KNEEL, 0);
+    FakeSet(S_DYN_DISABLED, 0);
+    FakeSet(S_PRF187, 0);
+    FakeSet(S_BUSY_TASK, -1);
+    FakeSet(S_SPEED_CM, 0);
+    FakeSet(S_CARRYING, 0);
+    FakeSet(S_AIMING, 0);
     static const int zero[] = { GL_CAMP_FLAGS2, GL_CAMP_IS_UP, GL_ZONE, GL_ZONE_AREA, GL_DISTRICT, GL_STORY_CAMP,
                                 GL_ON_MISSION, GL_MISSION_CAMP, GL_ENCOUNTER, GL_AMBUSH, GL_HORSE_AWAY, GL_LED_HORSE,
                                 GL_CAMP_FLOW120, GL_CAMP_FLOW15, GL_ITEM_USE_OFF, GL_CAMP_FORCED, GL_INV_FLAG_A,
@@ -428,16 +438,17 @@ int main()
     {
         char t[4096];
         FakeText(3, t, sizeof t);
-        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.2.0 loaded") != nullptr &&
+        Check("shows the loaded message", strstr(t, "Fast Travel Anywhere 1.2.1 loaded") != nullptr &&
                                             strstr(t, "Set Up Camp anywhere") != nullptr);
         FILE* f = fopen("FastTravelAnywhere.ini", "rb");
-        char ini[4096] = { 0 };
+        char ini[8192] = { 0 };
         if (f) { fread(ini, 1, sizeof ini - 1, f); fclose(f); }
         Check("writes the default settings file", strstr(ini, "PromptControl=INPUT_CONTEXT_A") != nullptr &&
                                                    strstr(ini, "RequireHorseNearby=1") != nullptr &&
                                                    strstr(ini, "SetUpCampAnywhere=1") != nullptr &&
                                                    strstr(ini, "WaypointTravel=1") != nullptr &&
-                                                   strstr(ini, "AdvanceClock=1") != nullptr);
+                                                   strstr(ini, "AdvanceClock=1") != nullptr &&
+                                                   strstr(ini, "KneelAnywhere=1") != nullptr);
     }
 
     // The first kneels, in a French game whose CAMP text loads slowly: the
@@ -2159,6 +2170,124 @@ int main()
     }
 
     // Last: the game ignores the request (as with globals at other addresses).
+    Section("Kneel anywhere (holding E where the game won't kneel)");
+    {
+        // In Saint Denis the game doesn't kneel at all: a second of holding E, and the plugin has him kneel.
+        ResetWorld();
+        FakeSet(S_NO_GAME_KNEEL, 1);
+        FakeSet(S_CAMP_HERE, 0);                     // a town: no Set Up Camp of the kneel menu's own
+        FakeSet(S_HOLD_E, 1);
+        Frames(25);                                  // most of a second
+        Check("in a town where the game won't kneel: nothing in the first second of holding E",
+              FakeGet(Q_KNEEL) == K_OFF && FakeGet(Q_SCENARIO_STARTS) == 0);
+        bool knelt = RunUntil([] { return FakeGet(Q_KNEEL) == K_KNEEL; }, 90);
+        Check("...then Arthur kneels: the plugin starts the kneel as the satchel's Craft does",
+              knelt && FakeGet(Q_SCENARIO_STARTS) == 1 && FakeGet(Q_BAD_SCENARIO_ARGS) == 0 &&
+              LogHas("the game didn't kneel here") && LogHas("Kneel: the kneel menu came up"));
+        Frames(3);
+        Check("...and the kneel menu comes up with Fast Travel and Set Up Camp", FakeGet(Q_GROUP_DRAWN) == 1 &&
+              FakeGet(Q_FT_PROMPTS) == 1 && FakeGet(Q_CAMP_PROMPTS) == 1);
+        Frames(30);                                  // E still held
+        Check("...E held on: no second kneel, no Set Up Camp pressed by it", FakeGet(Q_SCENARIO_STARTS) == 1 &&
+              FakeGet(Q_CAMP_STARTS) == 0);
+        FakeSet(S_HOLD_E, 0);
+        Frames(3);
+        Press(SPACE);
+        Frames(3);
+        Check("...Fast Travel from there: the game's fast travel menu", FakeGet(Q_MENU_OPEN) == 1);
+        FakeSet(S_MENU, 1);
+        Frames(3);
+        StandUp();
+
+        // Where the game kneels by itself, it's the game's kneel.
+        ResetWorld();
+        FakeSet(S_HOLD_E, 1);
+        Frames(60);
+        Check("where the game kneels by itself: its own kneel, the plugin adds none",
+              FakeGet(Q_GAME_KNEELS) == 1 && FakeGet(Q_SCENARIO_STARTS) == 0 && FakeGet(Q_KNEEL) == K_KNEEL);
+        FakeSet(S_HOLD_E, 0);
+        StandUp();
+
+        // Only for a hold with nothing else going on.
+        struct HoldCase { const char* name; int set; int on; int off; const char* why; };
+        const HoldCase cases[] =
+        {
+            { "a tap of E (it does other things)",                          0,               0,   0, nullptr },
+            { "E held to loot or skin (TASK_LOOT_NEW)",                     S_BUSY_TASK,     445, -1, "busy with something else (task 445)" },
+            { "E held to grab someone (TASK_GRAPPLE)",                      S_BUSY_TASK,     149, -1, "busy with something else (task 149)" },
+            { "E held to mount (TASK_MOVE_MOUNT_DYNAMIC_ENTRY)",            S_BUSY_TASK,     305, -1, "busy with something else (task 305)" },
+            { "a game script with the kneel button off (a shop, say)",      S_DYN_DISABLED,  1,   0, "has the kneel button turned off here" },
+            { "a game script keeping him from kneeling (PRF_DisableDynamicPlayerScenarios)", S_PRF187, 1, 0, "keeps the player from kneeling here" },
+            { "wanted (E is surrender)",                                     S_WANTED,        1,   0, "wanted (E is surrender then)" },
+            { "on a mission",                                                S_MISSION,       1,   0, "on a mission" },
+            { "focused on someone",                                          S_INTERACTION,   7,   0, "aiming at or focused on something" },
+            { "aiming",                                                      S_AIMING,        1,   0, "aiming at or focused on something" },
+            { "carrying something",                                          S_CARRYING,      1,   0, "carrying something" },
+            { "in a vehicle",                                                S_INVEHICLE,     1,   0, "not on foot" },
+        };
+        for (const HoldCase& c : cases)
+        {
+            ResetWorld();
+            FakeSet(S_NO_GAME_KNEEL, 1);
+            if (c.set) FakeSet(c.set, c.on);
+            int logged = c.why ? LogCount(c.why) : 0;
+            FakeSet(S_HOLD_E, 1);
+            Frames(c.set ? 70 : 10);                 // a tap: a third of a second
+            FakeSet(S_HOLD_E, 0);
+            Frames(30);
+            bool none = FakeGet(Q_SCENARIO_STARTS) == 0 && FakeGet(Q_KNEEL) == K_OFF;
+            bool says = !c.why || LogCount(c.why) > logged;
+            if (c.set) FakeSet(c.set, c.off);
+            char n[160];
+            snprintf(n, sizeof n, "%s: no kneel of the plugin's%s", c.name, c.why ? ", the log says why" : "");
+            Check(n, none && says);
+            StandUp();
+        }
+        ResetWorld();
+        FakeSet(S_NO_GAME_KNEEL, 1);
+        FakeSet(S_SPEED_CM, 150);                    // walking while holding E
+        FakeSet(S_HOLD_E, 1);
+        Frames(45);
+        bool notYet = FakeGet(Q_SCENARIO_STARTS) == 0;
+        FakeSet(S_SPEED_CM, 0);                      // he stops, E still held
+        Frames(20);
+        bool stillNot = FakeGet(Q_SCENARIO_STARTS) == 0;
+        bool then = RunUntil([] { return FakeGet(Q_SCENARIO_STARTS) == 1; }, 40);
+        Check("holding E while walking: nothing until he's stood still a second, then he kneels", notYet && stillNot && then);
+        FakeSet(S_HOLD_E, 0);
+        StandUp();
+        ResetWorld();
+        WriteIni("KneelAnywhere=0\r\n");
+        Frames(70);                                  // the settings are read again every 2 s
+        FakeSet(S_NO_GAME_KNEEL, 1);
+        FakeSet(S_HOLD_E, 1);
+        Frames(70);
+        FakeSet(S_HOLD_E, 0);
+        Check("KneelAnywhere=0: no kneel where the game won't", FakeGet(Q_SCENARIO_STARTS) == 0 && FakeGet(Q_KNEEL) == K_OFF);
+        WriteIni("");
+        Frames(70);                                  // the settings read again
+
+        // The kneel menu not coming with the plugin's kneel (last: it stays off afterwards).
+        ResetWorld();
+        FakeSet(S_NO_GAME_KNEEL, 1);
+        FakeSet(S_NO_BRAIN, 1);
+        FakeSet(S_HOLD_E, 1);
+        RunUntil([] { return FakeGet(Q_SCENARIO_STARTS) == 1; }, 60);
+        FakeSet(S_HOLD_E, 0);
+        Frames(30);
+        bool kneelingBare = FakeGet(Q_KNEELING_NO_MENU) == 1;
+        Frames(90);                                  // 3 s
+        Check("no kneel menu with the plugin's kneel: after 3 s he's got up, it says why",
+              kneelingBare && FakeGet(Q_KNEELING_NO_MENU) == 0 && FakeGet(Q_KNEEL_EXITS) == 1 &&
+              HelpHas("couldn't bring up the kneel menu") && LogHas("KneelAnywhere is off until the game restarts"));
+        FakeSet(S_HOLD_E, 1);
+        Frames(70);
+        FakeSet(S_HOLD_E, 0);
+        Check("...and it doesn't try again this session", FakeGet(Q_SCENARIO_STARTS) == 1);
+        FakeSet(S_NO_BRAIN, 0);
+        ResetWorld();
+    }
+
     Section("The game doesn't respond");
     ResetWorld();
     FakeSet(S_SU_IGNORE, 1);
@@ -2199,6 +2328,8 @@ int main()
         Check("safe spots always asked for as the game asks (12: not indoors, not in water)", FakeGet(Q_BAD_SAFE_FLAGS) == 0);
         Check("the player and horses always moved as the game's own trips move them (SET_ENTITY_COORDS ..., 1, 0, 1, 1)",
               FakeGet(Q_BAD_COORD_FLAGS) == 0);
+        Check("the kneel always started as the satchel's Craft starts it (WORLD_PLAYER_DYNAMIC_KNEEL, its Arthur anims)",
+              FakeGet(Q_BAD_SCENARIO_ARGS) == 0);
         snprintf(d, sizeof d, "(%d frames, text pulled from under it %d times)", FakeGet(Q_BLANK_TOTAL), g_textPulls);
         Check("over the whole run, Fast Travel never sat in the kneel menu without text "
               "(but for a frame each time the tests pulled the text from under it)", FakeGet(Q_BLANK_TOTAL) <= g_textPulls, d);

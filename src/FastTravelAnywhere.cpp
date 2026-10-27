@@ -66,7 +66,7 @@
 #endif
 
 #define FTA_NAME    "Fast Travel Anywhere"
-#define FTA_VERSION "1.2.0"
+#define FTA_VERSION "1.2.1"
 
 // ===========================================================================
 // Paths & logging
@@ -156,6 +156,7 @@ struct Settings
     bool     campAnywhere;
     bool     waypointTravel;
     bool     advanceClock;
+    bool     kneelAnywhere;
     uint32_t promptControl;
     char     promptControlName[64];
     char     promptText[96];
@@ -179,6 +180,7 @@ static void DefaultSettings(Settings& s)
     s.campAnywhere        = true;
     s.waypointTravel      = true;
     s.advanceClock        = true;
+    s.kneelAnywhere       = true;
     strcpy(s.promptControlName, "INPUT_CONTEXT_A");
     s.promptControl       = Joaat("INPUT_CONTEXT_A");
     s.promptText[0]       = 0;
@@ -192,6 +194,11 @@ static const char kDefaultIni[] =
     "\r\n"
     "; 1 = add Fast Travel to the kneel menu, 0 = off\r\n"
     "Enabled=1\r\n"
+    "\r\n"
+    "; 1 = hold E to kneel where the game won't (in Saint Denis, say): after a second of holding\r\n"
+    "; it with nothing else going on, Arthur kneels the way he does to craft from the satchel, and\r\n"
+    "; the kneel menu comes up there too. 0 = only where the game kneels by itself.\r\n"
+    "KneelAnywhere=1\r\n"
     "\r\n"
     "; 1 = with a waypoint on the map, Fast Travel takes you straight there (to the road nearest\r\n"
     "; it, with your horse). Without a waypoint you get the game's fast travel menu as before,\r\n"
@@ -336,6 +343,7 @@ static void LoadSettings()
             else if (!_stricmp(key, "SetUpCampAnywhere"))   g_cfg.campAnywhere = ParseBool(val, g_cfg.campAnywhere);
             else if (!_stricmp(key, "WaypointTravel"))      g_cfg.waypointTravel = ParseBool(val, g_cfg.waypointTravel);
             else if (!_stricmp(key, "AdvanceClock"))        g_cfg.advanceClock = ParseBool(val, g_cfg.advanceClock);
+            else if (!_stricmp(key, "KneelAnywhere"))       g_cfg.kneelAnywhere = ParseBool(val, g_cfg.kneelAnywhere);
             else if (!_stricmp(key, "PromptText"))
             {
                 strncpy(g_cfg.promptText, val, sizeof g_cfg.promptText - 1);
@@ -359,11 +367,11 @@ static void LoadSettings()
     if (GetFileAttributesExA(g_iniPath, GetFileExInfoStandard, &a))
         g_iniStamp = a.ftLastWriteTime;
 
-    Log("Settings: Enabled=%d WaypointTravel=%d AdvanceClock=%d SetUpCampAnywhere=%d RequireUnlock=%d "
+    Log("Settings: Enabled=%d KneelAnywhere=%d WaypointTravel=%d AdvanceClock=%d SetUpCampAnywhere=%d RequireUnlock=%d "
         "RequireHorseNearby=%d AllowWhenWanted=%d "
         "AllowOnMissions=%d ShowWhenUnavailable=%d StandUp=%d PromptControl=%s (0x%08X) "
         "PromptText=\"%s\" DebugLog=%d LockMovementInMenu=%d",
-        g_cfg.enabled, g_cfg.waypointTravel, g_cfg.advanceClock, g_cfg.campAnywhere, g_cfg.requireUnlock,
+        g_cfg.enabled, g_cfg.kneelAnywhere, g_cfg.waypointTravel, g_cfg.advanceClock, g_cfg.campAnywhere, g_cfg.requireUnlock,
         g_cfg.requireHorseNearby, g_cfg.allowWhenWanted,
         g_cfg.allowOnMissions, g_cfg.showWhenUnavailable, g_cfg.standUp, g_cfg.promptControlName,
         g_cfg.promptControl, g_cfg.promptText, g_cfg.debugLog, g_cfg.lockMovementInMenu);
@@ -583,6 +591,24 @@ namespace N
         int64_t target = 0;  // Entity* out-parameter: give it a full 8-byte slot
         return Invoke<int>(0x3EE1F7A8C32F24E1ULL, player, &target, 0, 0) != 0;                                    // PLAYER::GET_PLAYER_INTERACTION_TARGET_ENTITY
     }
+    // Kneeling where the game won't: as the satchel's Craft does (simple_crafting)
+    static inline void TaskStartScenarioInPlace(int p, uint32_t scenario, uint32_t anims)
+    { InvokeVoid(0x524B54361229154FULL, p, scenario, 0, 1, anims, -1.0f, 0); }                                  // TASK::TASK_START_SCENARIO_IN_PLACE_HASH(ped, scenario, 0, true, anims, -1.0, false)
+    static inline bool IsPedUsingAnyScenario(int p)  { return Invoke<int>(0x57AB4A3080F85143ULL, p) != 0; }      // PED::IS_PED_USING_ANY_SCENARIO
+    static inline bool GetPedResetFlag(int p, int f) { return Invoke<int>(0xAF9E59B1B1FBF2A0ULL, p, f) != 0; }   // PED::GET_PED_RESET_FLAG
+    static inline bool IsTaskActive(int p, int task) { return Invoke<int>(0xB0760331C7AA4155ULL, p, task) != 0; } // TASK::GET_IS_TASK_ACTIVE
+    static inline float EntitySpeed(int e)           { return Invoke<float>(0xFB6BA510A533DF81ULL, e); }         // ENTITY::GET_ENTITY_SPEED (m/s)
+    static inline bool IsPedOnFoot(int p)            { return Invoke<int>(0x01FEE67DB37F59B2ULL, p) != 0; }      // PED::IS_PED_ON_FOOT
+    static inline bool IsPedSwimming(int p)          { return Invoke<int>(0x9DE327631295B4C2ULL, p) != 0; }      // PED::IS_PED_SWIMMING
+    static inline bool IsPedEnteringAnyTransport(int p) { return Invoke<int>(0x1D46B417F926D34DULL, p) != 0; }   // PED::IS_PED_ENTERING_ANY_TRANSPORT
+    static inline bool IsPedInMeleeCombat(int p)     { return Invoke<int>(0x4E209B2C1EAD5159ULL, p) != 0; }      // PED::IS_PED_IN_MELEE_COMBAT
+    static inline bool IsPedClimbing(int p)          { return Invoke<int>(0x53E8CB4F48BFE623ULL, p) != 0; }      // PED::IS_PED_CLIMBING
+    static inline bool IsPedInCover(int p)           { return Invoke<int>(0x60DFD0691A170B88ULL, p, 0, 0) != 0; } // PED::IS_PED_IN_COVER
+    static inline bool IsPedGettingUp(int p)         { return Invoke<int>(0x2A74E1D5F2F00EECULL, p) != 0; }      // TASK::IS_PED_GETTING_UP
+    static inline bool IsPedHogtied(int p)           { return Invoke<int>(0x3AA24CCC0D451379ULL, p) != 0; }      // PED::IS_PED_HOGTIED
+    static inline bool IsPedCarryingSomething(int p) { return Invoke<int>(0xA911EE21EDF69DAFULL, p) != 0; }      // PED::IS_PED_CARRYING_SOMETHING
+    static inline bool IsPlayerFreeAiming(int pl)    { return Invoke<int>(0x936F967D4BE1CE9DULL, pl) != 0; }     // PLAYER::IS_PLAYER_FREE_AIMING
+    static inline bool IsPlayerTargettingAnything(int pl) { return Invoke<int>(0x4605C66E0F935F83ULL, pl) != 0; } // PLAYER::IS_PLAYER_TARGETTING_ANYTHING
 
     // Prompts
     static inline int  PromptRegisterBegin()                  { return Invoke<int>(0x04F97DE45A519419ULL); }      // HUD::_UI_PROMPT_REGISTER_BEGIN
@@ -636,6 +662,8 @@ namespace N
     static inline float DisabledControlNormal(uint32_t a)      { return Invoke<float>(0x11E65974A982637CULL, 0, a); } // PAD::GET_DISABLED_CONTROL_NORMAL
     static inline void SetControlContext(int layer, uint32_t ctx) { InvokeVoid(0x2804658EB7D8A50BULL, layer, ctx); } // PAD::_SET_CONTROL_CONTEXT (every frame)
     static inline bool IsDisabledControlJustReleased(uint32_t a) { return Invoke<int>(0x305C8DCD79DA8B0FULL, 0, a) != 0; } // PAD::IS_DISABLED_CONTROL_JUST_RELEASED
+    static inline bool IsControlPressed(uint32_t a)            { return Invoke<int>(0xF3A21BCD95725A4AULL, 0, a) != 0; } // PAD::IS_CONTROL_PRESSED (false while a script has it disabled)
+    static inline bool IsDisabledControlPressed(uint32_t a)    { return Invoke<int>(0xE2587F8CBBD87B1DULL, 0, a) != 0; } // PAD::IS_DISABLED_CONTROL_PRESSED (the key itself)
     static inline bool IsControlActionValid(uint32_t a)        { return Invoke<int>(0xBC0884BC590951C7ULL, a, 0) != 0; } // PAD::_IS_CONTROL_ACTION_VALID(action, control)
 
     // Screen
@@ -854,6 +882,7 @@ static uint32_t H_KIT_CAMP, H_KIT_CAMP_SIMPLE, H_RCM_EVELYN4, H_LAW_DISPATCH_PEN
 static uint32_t H_INPUT_MOVE_LR, H_INPUT_MOVE_UD, H_FRONTEND_PAUSE, H_FRONTEND_PAUSE_ALT, H_CTX_FRONTEND_MENU;
 static uint32_t H_KNEEL_EXIT;
 static uint32_t H_PLAYER_ZERO, H_BLACKWATER, H_GAPTOOTH_RIDGE, H_RIO_BRAVO, H_CHOLLA_SPRINGS, H_HENNIGANS_STEAD;
+static uint32_t H_INPUT_DYNAMIC_SCENARIO, H_KNEEL_SCENARIO, H_KNEEL_ARTHUR;
 
 static void InitHashes()
 {
@@ -889,6 +918,9 @@ static void InitHashes()
     H_RIO_BRAVO        = Joaat("RIOBRAVO");
     H_CHOLLA_SPRINGS   = Joaat("CHOLLASPRINGS");
     H_HENNIGANS_STEAD  = Joaat("HENNIGANSSTEAD");
+    H_INPUT_DYNAMIC_SCENARIO = Joaat("INPUT_DYNAMIC_SCENARIO");          // hold E: the game's kneel
+    H_KNEEL_SCENARIO   = Joaat("WORLD_PLAYER_DYNAMIC_KNEEL");
+    H_KNEEL_ARTHUR     = Joaat("WORLD_PLAYER_DYNAMIC_KNEEL_ARTHUR");     // its anims, as simple_crafting asks for them
 }
 
 // ===========================================================================
@@ -3046,6 +3078,170 @@ static void CampPromptTick(int now, int ped, int player)
 }
 
 // ===========================================================================
+// Kneel anywhere
+// ===========================================================================
+//
+// Holding E (INPUT_DYNAMIC_SCENARIO) makes Arthur kneel: the game picks its
+// "dynamic scenario" WORLD_PLAYER_DYNAMIC_KNEEL, and the kneel menu comes with
+// it. The menu's script, dynamic_craft_scenario, belongs to the scenario: the
+// game starts it with the scenario point the player is using, and it ends when
+// he leaves that point. It comes with kneels that scripts start, too: crafting
+// from the satchel (simple_crafting) and the camera's poses (camera_item, which
+// the kneel menu waits out). In some places the game doesn't kneel at all
+// (Saint Denis, say). There, once E has been held for a second with nothing
+// else going on, the plugin has Arthur kneel the way the satchel's Craft does
+// (TASK_START_SCENARIO_IN_PLACE_HASH with WORLD_PLAYER_DYNAMIC_KNEEL and the
+// WORLD_PLAYER_DYNAMIC_KNEEL_ARTHUR anims), and the kneel menu comes up as it
+// always does (KneelAnywhere=1).
+//
+// E is also mount, loot, pick up, grab, surrender, buy and more. A hold that
+// starts any of those gives the player a task, and is left alone; so is one
+// the game turns into its own kneel, and one while a script keeps the player
+// from kneeling (the button disabled, or PRF_DisableDynamicPlayerScenarios).
+
+static const int kKneelHoldMs = 1000;
+
+// Tasks a held E may have started (eTaskType); then the hold isn't for kneeling.
+static const int kBusyTasks[] =
+{
+    0,                       // TASK_HANDS_UP (surrendering)
+    8,                       // TASK_LEAD_HORSE
+    10,                      // TASK_HUMAN_INTERACTION
+    26,                      // TASK_PLAYER_ARRESTED
+    74,                      // TASK_OPEN_DOOR
+    138,                     // TASK_USE_SCENARIO
+    144,                     // TASK_STEAL_VEHICLE
+    149, 150, 151, 152,      // TASK_GRAPPLE, TASK_GRAPPLED, TASK_MOVE_GRAPPLE, TASK_MELEE
+    189,                     // TASK_OPEN_VEHICLE_DOOR_FROM_OUTSIDE
+    200,                     // TASK_MOTION_ENTER_VEHICLE
+    215, 216,                // TASK_HITCH_ANIMAL, TASK_HITCH_HORSE
+    305,                     // TASK_MOVE_MOUNT_DYNAMIC_ENTRY
+    393, 394,                // TASK_MOTION_CARRYING, TASK_MOTION_CARRYING_INLINE
+    409, 410,                // TASK_MOTION_ITEM_INTERACTION(_STATE)
+    441, 442, 443, 444, 445, 446,   // TASK_PICK_UP_WEAPON, the loot tasks (skinning, picking things up)
+    452, 453,                // TASK_HOGTIE, TASK_PICKUP_ON_FOOT
+    462, 466,                // TASK_LOOT_GRAB, TASK_LOOT_OR_PICKUP
+};
+
+static int         g_holdAt       = -1;       // E held since (nothing else going on)
+static bool        g_holdDone     = false;    // this hold has been dealt with
+static const char* g_holdWhy      = nullptr;  // ...left to the game for this reason (logged if E stays down)
+static int         g_kneelAskedAt = -1;       // the plugin had him kneel: when (the kneel menu is due)
+static bool        g_kneelOff     = false;    // no kneel menu came with the plugin's kneel: off for the session
+
+// Why a held E isn't for kneeling here, or nullptr. *wait: not yet (he's still moving).
+static const char* HoldBusy(int ped, int player, bool* wait)
+{
+    *wait = false;
+    if (N::IsPedUsingAnyScenario(ped) || N::PedHasUseScenarioTask(ped) || N::ScriptThreads(H_DYNAMIC_CRAFT) > 0)
+        return "";   // the game is kneeling (or in some other scenario): nothing to say
+    if (!N::IsControlPressed(H_INPUT_DYNAMIC_SCENARIO))
+        return "a game script has the kneel button turned off here";
+    if (N::GetPedResetFlag(ped, 187))   // PRF_DisableDynamicPlayerScenarios, set by a script
+        return "a game script keeps the player from kneeling here";
+    if (!N::IsPedOnFoot(ped) || N::IsPedOnMount(ped) || N::IsPedInAnyVehicle(ped) || N::IsPedEnteringAnyTransport(ped))
+        return "not on foot";
+    if (N::IsPedSwimming(ped) || N::IsPedFalling(ped) || N::IsPedRagdoll(ped) || N::IsPedClimbing(ped) ||
+        N::IsPedGettingUp(ped) || N::IsPedHogtied(ped))
+        return "swimming, falling, climbing or down";
+    if (N::IsPedInCombat(ped) || N::IsPedInMeleeCombat(ped) || N::IsPedInCover(ped))
+        return "in a fight";
+    if (N::IsPedCarryingSomething(ped))
+        return "carrying something";
+    if (N::PlayerHasInteractionTarget(player) || N::IsPlayerFreeAiming(player) || N::IsPlayerTargettingAnything(player))
+        return "aiming at or focused on something";
+    for (int t : kBusyTasks)
+        if (N::IsTaskActive(ped, t))
+        {
+            static char why[48];
+            snprintf(why, sizeof why, "busy with something else (task %d)", t);
+            return why;
+        }
+    if (N::IsLawIncidentActive(player))
+        return "wanted (E is surrender then)";
+    if (N::MissionFlag())
+        return "on a mission";
+    if (N::IsUiAppActive(H_PLAYER_MENU) || G::Int(G::kUiBusy, 0) != 0)
+        return "a menu is up";
+    if (N::EntitySpeed(ped) > 0.5f)
+    {
+        *wait = true;
+        return "moving";
+    }
+    return nullptr;
+}
+
+static void KneelAnywhereTick(int now, int ped, int player)
+{
+    // The plugin's kneel: the kneel menu comes with it, else he gets up again.
+    if (g_kneelAskedAt >= 0)
+    {
+        if (N::ScriptThreads(H_DYNAMIC_CRAFT) > 0)
+        {
+            Log("Kneel: the kneel menu came up (%.1f s after).", (now - g_kneelAskedAt) / 1000.0);
+            g_kneelAskedAt = -1;
+        }
+        else if (now - g_kneelAskedAt > 3000)
+        {
+            g_kneelAskedAt = -1;
+            g_kneelOff = true;
+            bool kneeling = N::IsPedUsingAnyScenario(ped);
+            if (kneeling)
+                N::GivePedHashCommand(ped, H_KNEEL_EXIT, 2.0f);
+            Log("Kneel: no kneel menu 3 s after the plugin had him kneel (%s). KneelAnywhere is off until the game "
+                "restarts.", kneeling ? "he's kneeling: getting him up" : "he isn't kneeling");
+            HelpText(nullptr, "Fast Travel Anywhere couldn't bring up the kneel menu here.");
+        }
+        return;
+    }
+    if (!g_cfg.kneelAnywhere || g_kneelOff)
+        return;
+
+    // The key itself (scripts that turn the button off are seen in HoldBusy).
+    if (!N::IsDisabledControlPressed(H_INPUT_DYNAMIC_SCENARIO))
+    {
+        g_holdAt = -1;
+        g_holdDone = false;
+        g_holdWhy = nullptr;
+        return;
+    }
+    if (g_holdAt < 0)
+        g_holdAt = now;
+    if (g_holdDone)
+    {
+        if (g_holdWhy && now - g_holdAt >= kKneelHoldMs)
+        {
+            Log("Kneel: E held, left to the game (%s).", g_holdWhy);
+            g_holdWhy = nullptr;
+        }
+        return;
+    }
+    bool wait;
+    const char* busy = HoldBusy(ped, player, &wait);
+    if (busy && !wait)
+    {
+        g_holdDone = true;                 // the game's (its kneel, or what the press started)
+        g_holdWhy = busy[0] ? busy : nullptr;
+        return;
+    }
+    if (busy)
+    {
+        g_holdAt = now;                    // a second once he's stood still
+        return;
+    }
+    if (now - g_holdAt < kKneelHoldMs)
+        return;
+
+    g_holdDone = true;
+    N::Vec3 me = N::EntityCoords(ped);
+    Log("Kneel: E held %.1f s and the game didn't kneel here (town zone 0x%08X%s); the plugin has him kneel, as the "
+        "satchel's Craft does.", (now - g_holdAt) / 1000.0, N::MapZoneAt(me.x, me.y, me.z, 1),
+        N::IsInteriorScene() ? ", indoors" : "");
+    N::TaskStartScenarioInPlace(ped, H_KNEEL_SCENARIO, H_KNEEL_ARTHUR);
+    g_kneelAskedAt = now;
+}
+
+// ===========================================================================
 // The kneel menu watch
 // ===========================================================================
 
@@ -3236,6 +3432,9 @@ static void IdleTick(int now, int ped, int player)
     // shows its prompts. Let it go again a while after the kneel is over.
     bool watching = g_cfg.enabled || g_cfg.campAnywhere;
     bool kneeling = watching && N::ScriptThreads(H_DYNAMIC_CRAFT) > 0 && !N::IsEntityDead(ped);
+    // Hold E where the game won't kneel: the plugin has him kneel.
+    if (watching && !N::IsEntityDead(ped))
+        KneelAnywhereTick(now, ped, player);
     if (kneeling)
     {
         g_kneelSeenAt = now;
@@ -3339,6 +3538,9 @@ static void ScriptMain()
                     N::ScriptNoLongerNeeded("player_camp");
                 g_campPhase = CP_IDLE;
                 g_hiddenCount = 0;
+                g_kneelAskedAt = -1;
+                g_holdAt = -1;
+                g_holdDone = false;
             }
         }
         // A save loading or an online session during a trip to the waypoint: gone with the old world.

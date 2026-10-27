@@ -211,6 +211,18 @@ struct Sim
     int   badCoordFlags;               // SET_ENTITY_COORDS not called with (1, 0, 1, 1)
     int   waterAsks;
     int   underwaterFrames;            // frames the player was held frozen under a lake's surface
+    // holding E (INPUT_DYNAMIC_SCENARIO) and the game's own kneel
+    int   holdE, holdFrames;           // E held, for this many frames
+    int   noGameKneel;                 // the game won't kneel here (Saint Denis, say)
+    int   dynDisabled;                 // a script has INPUT_DYNAMIC_SCENARIO disabled
+    int   prf187;                      // PRF_DisableDynamicPlayerScenarios set
+    int   busyTask;                    // a task the held E started (-1: none)
+    float speed;                       // the player's speed, m/s
+    int   carrying, aiming;
+    int   noBrain;                     // a kneel started by a script doesn't bring the kneel menu
+    int   scenarioOnly;                // kneeling without the kneel menu (with noBrain)
+    int   scenarioStarts, badScenarioArgs;
+    int   gameKneels;                  // kneels the game started from a held E
 };
 static Sim g_sim;
 
@@ -753,6 +765,43 @@ uint64_t* FS_nativeCall()
         break;
     }
     case 0xFB92A102F1C4DFA3ULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.playerFalling; break;       // IS_PED_FALLING
+    // ---- holding E: the game's kneel, and the plugin's ----
+    case 0xF3A21BCD95725A4AULL:                                                           // IS_CONTROL_PRESSED
+        Want(2);
+        g_result[0] = (uint32_t)g_args[1] == H("INPUT_DYNAMIC_SCENARIO") && g_sim.holdE && !g_sim.dynDisabled;
+        break;
+    case 0xE2587F8CBBD87B1DULL:                                                           // IS_DISABLED_CONTROL_PRESSED
+        Want(2);
+        g_result[0] = (uint32_t)g_args[1] == H("INPUT_DYNAMIC_SCENARIO") && g_sim.holdE;
+        break;
+    case 0x524B54361229154FULL:                                                           // TASK_START_SCENARIO_IN_PLACE_HASH
+        Want(7);
+        g_sim.scenarioStarts++;
+        if (I(0) != kPlayerPed || (uint32_t)g_args[1] != H("WORLD_PLAYER_DYNAMIC_KNEEL") || I(2) != 0 || I(3) != 1 ||
+            (uint32_t)g_args[4] != H("WORLD_PLAYER_DYNAMIC_KNEEL_ARTHUR") || F(5) != -1.0f || I(6) != 0)
+            g_sim.badScenarioArgs++;
+        else if (g_sim.noBrain)
+            g_sim.scenarioOnly = 1;            // kneeling, but no kneel menu came with it
+        else if (g_sim.kneel == K_OFF)
+        {
+            g_sim.kneel = K_DOWN; g_sim.kneelFrames = g_sim.downFrames; g_sim.downElapsed = 0; g_sim.setCamp = 0;
+        }
+        break;
+    case 0x57AB4A3080F85143ULL: Want(1); g_result[0] = I(0) == kPlayerPed && (g_sim.kneel != K_OFF || g_sim.scenarioOnly); break; // IS_PED_USING_ANY_SCENARIO
+    case 0xAF9E59B1B1FBF2A0ULL: Want(2); g_result[0] = I(0) == kPlayerPed && I(1) == 187 && g_sim.prf187; break;  // GET_PED_RESET_FLAG
+    case 0xB0760331C7AA4155ULL: Want(2); g_result[0] = I(0) == kPlayerPed && g_sim.busyTask >= 0 && I(1) == g_sim.busyTask; break; // GET_IS_TASK_ACTIVE
+    case 0xFB6BA510A533DF81ULL: { Want(1); float v = I(0) == kPlayerPed ? g_sim.speed : 0.0f; memcpy(&g_result[0], &v, 4); break; } // GET_ENTITY_SPEED
+    case 0x01FEE67DB37F59B2ULL: Want(1); g_result[0] = I(0) == kPlayerPed && !g_sim.inVehicle; break;         // IS_PED_ON_FOOT
+    case 0x9DE327631295B4C2ULL: Want(1); g_result[0] = 0; break;                                            // IS_PED_SWIMMING
+    case 0x1D46B417F926D34DULL: Want(1); g_result[0] = 0; break;                                            // IS_PED_ENTERING_ANY_TRANSPORT
+    case 0x4E209B2C1EAD5159ULL: Want(1); g_result[0] = 0; break;                                            // IS_PED_IN_MELEE_COMBAT
+    case 0x53E8CB4F48BFE623ULL: Want(1); g_result[0] = 0; break;                                            // IS_PED_CLIMBING
+    case 0x60DFD0691A170B88ULL: Want(3); g_result[0] = 0; break;                                            // IS_PED_IN_COVER
+    case 0x2A74E1D5F2F00EECULL: Want(1); g_result[0] = 0; break;                                            // IS_PED_GETTING_UP
+    case 0x3AA24CCC0D451379ULL: Want(1); g_result[0] = 0; break;                                            // IS_PED_HOGTIED
+    case 0xA911EE21EDF69DAFULL: Want(1); g_result[0] = I(0) == kPlayerPed && g_sim.carrying; break;         // IS_PED_CARRYING_SOMETHING
+    case 0x936F967D4BE1CE9DULL: Want(1); g_result[0] = g_sim.aiming; break;                                 // IS_PLAYER_FREE_AIMING
+    case 0x4605C66E0F935F83ULL: Want(1); g_result[0] = 0; break;                                            // IS_PLAYER_TARGETTING_ANYTHING
     case 0x513F8AA5BF2F17CFULL:                                                           // LOAD_SCENE_START_SPHERE
         Want(5);
         g_sim.sceneP4 = I(4);
@@ -874,7 +923,7 @@ uint64_t* FS_nativeCall()
     case 0xAA135F9482C82CC3ULL: Want(2); g_result[0] = I(0) == kPlayerPed && ActiveInScenario(I(1)); break;  // IS_PED_ACTIVE_IN_SCENARIO
     case 0x0C3CB2E600C8977DULL: Want(2); g_result[0] = I(0) == kPlayerPed && g_sim.kneel == K_EXIT; break; // IS_PED_EXITING_SCENARIO
     case 0xEC7E480FF8BD0BEDULL: Want(1); g_result[0] = g_sim.itemInteraction; break;                         // IS_PED_RUNNING_TASK_ITEM_INTERACTION
-    case 0x295E3CCEC879CCD7ULL: Want(1); g_result[0] = I(0) == kPlayerPed && HasScenarioTask(); break;      // PED_HAS_USE_SCENARIO_TASK
+    case 0x295E3CCEC879CCD7ULL: Want(1); g_result[0] = I(0) == kPlayerPed && (HasScenarioTask() || g_sim.scenarioOnly); break; // PED_HAS_USE_SCENARIO_TASK
     case 0x02EBBB3989B7E695ULL: Want(1); g_result[0] = I(0) == kPlayerPed && InScenarioBase(); break;        // _PED_IS_IN_SCENARIO_BASE
     case 0x3EE1F7A8C32F24E1ULL: {                                                         // GET_PLAYER_INTERACTION_TARGET_ENTITY
         Want(4);
@@ -1120,6 +1169,7 @@ uint64_t* FS_nativeCall()
         {
             g_sim.kneelExitCmds++;
             if (g_sim.kneel == K_KNEEL) { g_sim.kneel = K_EXIT; g_sim.kneelFrames = 40; }
+            g_sim.scenarioOnly = 0;
         }
         break;
     case 0x1913FE4CBF41C463ULL: { Want(3); if (Ent* x = FindEnt(I(0))) if (I(1) == 388) x->pcf388 = I(2); break; } // SET_PED_CONFIG_FLAG
@@ -1334,6 +1384,16 @@ extern "C" __declspec(dllexport) void FakeGameTick()
     else if (g_sim.kneel == K_EXIT && --g_sim.kneelFrames <= 0)
         g_sim.kneel = K_OFF;
 
+    // holding E: the game kneels a third of a second in, where it will, if nothing else took the press
+    g_sim.holdFrames = g_sim.holdE ? g_sim.holdFrames + 1 : 0;
+    if (g_sim.holdFrames == 10 && !g_sim.noGameKneel && !g_sim.dynDisabled && !g_sim.prf187 && g_sim.busyTask < 0 &&
+        !g_sim.inVehicle && !g_sim.wanted && !g_sim.interactionTarget && g_sim.speed <= 0.5f &&
+        g_sim.kneel == K_OFF && !g_sim.scenarioOnly)
+    {
+        g_sim.kneel = K_DOWN; g_sim.kneelFrames = g_sim.downFrames; g_sim.downElapsed = 0; g_sim.setCamp = 0;
+        g_sim.gameKneels++;
+    }
+
     // the CAMP text block finishes loading
     if (g_sim.campLoadIn > 0 && --g_sim.campLoadIn == 0)
         g_sim.campLoaded = 1;
@@ -1511,6 +1571,7 @@ enum SetWhat
     S_PLAYER_JOHN, S_GPS_ON_ROAD, S_NA_X, S_BW_ON, S_BW_X, S_BW_Y, S_ZONE_ZMIN, S_WATER_R, S_WATER_DEPTH,
     S_NAV_NEVER, S_GROUND_LATE, S_PLAYER_FALLING, S_LOADING_SCREEN, S_OTHER_SCENE, S_PLAYER_NODAMAGE,
     S_HORSE_NODAMAGE, S_PLAYER_FROZEN, S_FADE, S_NAV_FRAMES,
+    S_HOLD_E, S_NO_GAME_KNEEL, S_DYN_DISABLED, S_PRF187, S_BUSY_TASK, S_SPEED_CM, S_CARRYING, S_AIMING, S_NO_BRAIN,
 };
 
 extern "C" __declspec(dllexport) void FakeSet(int what, int v)
@@ -1604,6 +1665,15 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
     case S_PLAYER_FROZEN: g_sim.playerFrozen = v; break;
     case S_FADE:          g_sim.fade = v; break;   // the screen as the game left it (0 in, 2 out)
     case S_NAV_FRAMES:    g_sim.navLoadFrames = v; break;
+    case S_HOLD_E:        g_sim.holdE = v; break;
+    case S_NO_GAME_KNEEL: g_sim.noGameKneel = v; break;
+    case S_DYN_DISABLED:  g_sim.dynDisabled = v; break;
+    case S_PRF187:        g_sim.prf187 = v; break;
+    case S_BUSY_TASK:     g_sim.busyTask = v; break;
+    case S_SPEED_CM:      g_sim.speed = v / 100.0f; break;
+    case S_CARRYING:      g_sim.carrying = v; break;
+    case S_AIMING:        g_sim.aiming = v; break;
+    case S_NO_BRAIN:      g_sim.noBrain = v; if (!v) g_sim.scenarioOnly = 0; break;
     case S_CRAFTING:
         // the kneel menu's Craft: simple_crafting loads the CAMP text when it
         // starts (its func_30) and unloads it when it ends
@@ -1646,6 +1716,7 @@ extern "C" __declspec(dllexport) void FakeSet(int what, int v)
         g_sim.gpsAsks = 0; g_sim.gpsAskZ[0] = g_sim.gpsAskZ[1] = 0.0f;
         g_sim.sceneStarts = g_sim.mounts = g_sim.camHeadings = g_sim.clockAdded = g_sim.collRequests = 0;
         g_sim.zoneAsks = g_sim.waterAsks = g_sim.underwaterFrames = 0; g_sim.sceneP4 = -1;
+        g_sim.scenarioStarts = g_sim.gameKneels = 0;
         g_sim.mountedOn = 0;
         memset(g_sim.campArgs, 0, sizeof g_sim.campArgs);
         g_helpCount = 0;
@@ -1672,7 +1743,7 @@ enum GetWhat
     Q_GPS_ASKS, Q_GPS_ASK_Z0, Q_GPS_ASK_Z1, Q_BAD_SAFE_FLAGS, Q_H101_X, Q_H101_Y, Q_H100_X, Q_H100_Y,
     Q_HORSE_UNTARGETTABLE, Q_COLL_REQUESTS, Q_CAM_HEADINGS, Q_PLAYER_HEADING, Q_H100_HEADING, Q_H100_UNHITCHES,
     Q_UNDAMAGEABLE, Q_PLAYER_NODAMAGE, Q_H100_NODAMAGE, Q_SCENE_P4, Q_BAD_COORD_FLAGS, Q_ZONE_ASKS, Q_WATER_ASKS,
-    Q_IN_LAKE, Q_UNDERWATER_FRAMES,
+    Q_IN_LAKE, Q_UNDERWATER_FRAMES, Q_SCENARIO_STARTS, Q_BAD_SCENARIO_ARGS, Q_GAME_KNEELS, Q_KNEELING_NO_MENU,
     Q_CAMP_ARG0 = 200,   // ...to Q_CAMP_ARG0 + 9
 };
 
@@ -1826,6 +1897,10 @@ extern "C" __declspec(dllexport) int FakeGet(int what)
     case Q_WATER_ASKS:      return g_sim.waterAsks;
     case Q_IN_LAKE:         return InLake(g_sim.px, g_sim.py);
     case Q_UNDERWATER_FRAMES: return g_sim.underwaterFrames;
+    case Q_SCENARIO_STARTS: return g_sim.scenarioStarts;
+    case Q_BAD_SCENARIO_ARGS: return g_sim.badScenarioArgs;
+    case Q_GAME_KNEELS:     return g_sim.gameKneels;
+    case Q_KNEELING_NO_MENU: return g_sim.scenarioOnly;
     case Q_KNEEL_VISIBLE:
     case Q_KNEEL_PROMPTS:
     {
@@ -1956,6 +2031,7 @@ extern "C" __declspec(dllexport) void FakeInit()
     g_sim.zoneZMin = -1.0e9f;
     g_sim.waterDepth = 5.0f;
     g_sim.navLoadFrames = 12;
+    g_sim.busyTask = -1;
     SI(GL_PLAYER, kPlayerPed);
     // Another script's prompt on E in the shared prompt list (long_update's thread),
     // which isn't the kneel menu's
